@@ -2,8 +2,7 @@
 
 Aplicație web pentru generarea foilor de parcurs cu distanțe calculate automat folosind OSRM (varianta gratuită OpenStreetMap).
 
-🔗 **Aplicație live**: [Accesează aici](https://banciumihaicatalin-design-foaieparcurs-xxxxx.streamlit.app)  
-*(înlocuiește linkul cu cel real generat la deploy pe Streamlit Cloud)*
+🔗 **Aplicație live**: [Accesează aici](https://foaieparcurs-k7uumvurgzsyev695sbjpr.streamlit.app/)
 
 ---
 
