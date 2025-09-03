@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Foaie de parcurs - calcul automat km (OSRM gratuit)
-UI minimalistă, mobile-friendly, dark mode auto, ștergere individuală + „Șterge toate opririle”.
+UI minimalistă, mobile-friendly, dark mode auto, ștergere individuală + „Șterge toate opririle”,
+și geocodare robustă (nu mai cade aplicația dacă Nominatim/Photon nu răspund; arată warning in UI).
 """
 
 from __future__ import annotations
@@ -47,9 +48,7 @@ if st is not None:
           box-shadow: 0 1px 3px rgba(0,0,0,.04);
           margin-bottom: .8rem;
         }
-        .card-title {
-          font-weight: 700; margin: 0;
-        }
+        .card-title { font-weight: 700; margin: 0; }
         .muted {color:#666; font-size:.85rem}
 
         /* buton mic, discret, aliniat la dreapta */
@@ -104,7 +103,7 @@ OSRM_ROUTE_URL = (
     "https://router.project-osrm.org/route/v1/driving/"
     "{lon1},{lat1};{lon2},{lat2}?overview=full&alternatives=false&steps=false&geometries=geojson"
 )
-USER_AGENT = "FoaieParcursApp/3.2"
+USER_AGENT = "FoaieParcursApp/3.3 (+https://github.com/banciumihaicatalin-design/FoaieParcurs)"
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
 
 # --- Cache ---
@@ -131,6 +130,8 @@ def km_round(x: float, decimals: int = 1) -> float:
     pow10 = 10 ** decimals
     return math.floor(x * pow10 + 0.5) / pow10
 
+# Geocodare robustă: retry + fallback + fără except în UI
+
 def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> List[Dict]:
     if implicit_place and (implicit_place.lower() not in q.lower()):
         q = f"{q}, {implicit_place}"
@@ -140,27 +141,31 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> L
 
     last_err: Optional[Exception] = None
 
-    # Nominatim cu retry
-    for attempt in range(3):
+    # Nominatim cu retry (0s, 0.5s)
+    for attempt in range(2):
         try:
             r = requests.get(
                 NOMINATIM_URL,
                 params={"q": q, "format": "json", "limit": limit, "accept-language": "ro"},
                 headers={"User-Agent": USER_AGENT},
-                timeout=15,
+                timeout=10,
             )
             r.raise_for_status()
             js = r.json()
-            out = [{"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q)} for it in js]
+            out = [
+                {"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q)}
+                for it in js
+            ]
             if out:
                 _GEOCODE_DISK[key] = out
                 _save_json(CACHE_FILE, _GEOCODE_DISK)
                 if st is not None:
                     st.session_state["_geocode_source"] = "nominatim"
+                    st.session_state.pop("_geocode_error", None)
                 return out
         except Exception as e:
             last_err = e
-            time.sleep(attempt)
+            time.sleep(0.5 * attempt)
 
     # Fallback: Photon
     try:
@@ -168,7 +173,7 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> L
             PHOTON_URL,
             params={"q": q, "limit": limit, "lang": "ro"},
             headers={"User-Agent": USER_AGENT},
-            timeout=15,
+            timeout=10,
         )
         r.raise_for_status()
         js = r.json()
@@ -178,9 +183,11 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> L
             coords = ((f.get("geometry") or {}).get("coordinates") or [None, None])
             lon, lat = coords[0], coords[1]
             props = f.get("properties", {})
-            parts = [props.get("name"), props.get("street"), props.get("housenumber"),
-                     props.get("city"), props.get("county"), props.get("state"),
-                     props.get("country"), props.get("postcode")]
+            parts = [
+                props.get("name"), props.get("street"), props.get("housenumber"),
+                props.get("city"), props.get("county"), props.get("state"),
+                props.get("country"), props.get("postcode")
+            ]
             disp = ", ".join([str(p) for p in parts if p]) or q
             if lat is not None and lon is not None:
                 out2.append({"lat": float(lat), "lon": float(lon), "display": disp})
@@ -189,13 +196,16 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> L
             _save_json(CACHE_FILE, _GEOCODE_DISK)
             if st is not None:
                 st.session_state["_geocode_source"] = "photon"
+                st.session_state.pop("_geocode_error", None)
             return out2
-    except Exception:
-        pass
+    except Exception as e2:
+        last_err = last_err or e2
 
-    if last_err:
-        raise last_err
+    # NU mai aruncăm excepția: semnalăm în UI și întoarcem listă goală
+    if st is not None and last_err:
+        st.session_state["_geocode_error"] = str(last_err)
     return []
+
 
 def route_osrm(lat1: float, lon1: float, lat2: float, lon2: float) -> Optional[Dict]:
     try:
@@ -211,6 +221,7 @@ def route_osrm(lat1: float, lon1: float, lat2: float, lon2: float) -> Optional[D
         return None
 
 # --- UI helpers ---
+
 def _init_addr_state(key: str, default_text: str = "") -> None:
     if st is None:
         return
@@ -223,17 +234,21 @@ def _init_addr_state(key: str, default_text: str = "") -> None:
     st.session_state.setdefault(f"{key}_display", "")
     st.session_state.setdefault(f"{key}_last_fetch_ts", 0.0)
 
+
 def _refresh_candidates_if_due(key: str) -> None:
     if st is None:
         return
     q = (st.session_state.get(f"txt_{key}") or "").strip()
     last_q = (st.session_state.get(f"{key}_query") or "").strip()
     if q and q != last_q and len(q) >= 3:
+        # curățăm ultima eroare înainte de noua interogare
+        st.session_state.pop("_geocode_error", None)
         cands = geocode_osm_candidates(q, limit=6, implicit_place="")
         st.session_state[f"{key}_cands"] = cands
         st.session_state[f"{key}_query"] = q
         st.session_state[f"{key}_sel"] = 0
         st.session_state[f"{key}_last_fetch_ts"] = time.time()
+
 
 def _render_address_row(label: str, key: str) -> None:
     if st is None:
@@ -246,6 +261,7 @@ def _render_address_row(label: str, key: str) -> None:
         st.markdown(f"<p class='card-title'>Adresă</p>", unsafe_allow_html=True)
     with c2:
         rm = st.button("✖ Șterge", key=f"rm_{key}", use_container_width=True)
+
     # conținut card (text input + sugestii)
     st.text_input(label, key=f"txt_{key}")
     src = st.session_state.get("_geocode_source")
@@ -269,14 +285,19 @@ def _render_address_row(label: str, key: str) -> None:
         st.session_state[f"{key}_display"] = cands[idx]["display"]
         st.session_state[key] = cands[idx]["display"]
     else:
-        st.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
+        err = st.session_state.get("_geocode_error")
+        if err:
+            st.warning("Serviciul de geocodare este indisponibil momentan. Mai încearcă peste câteva secunde sau verifică conexiunea.")
+        else:
+            st.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)  # end card
 
-    # returnăm dacă a fost apăsat butonul de ștergere pentru acest card
+    # butonul a cerut ștergerea acestui card
     if rm:
         st.session_state.setdefault("_to_remove", []).append(key)
 
 # --- APP ---
+
 def run_streamlit_app() -> None:
     if st is None:
         print("Streamlit nu este disponibil în acest mediu.")
@@ -287,6 +308,7 @@ def run_streamlit_app() -> None:
     # Punct de plecare
     st.markdown("#### 📍 Punct de plecare")
     _init_addr_state("start", "Piata Unirii, Bucuresti")
+
     # card mic doar cu inputul start (fără buton de ștergere)
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.text_input("Adresa de plecare", key="txt_start")
@@ -306,7 +328,11 @@ def run_streamlit_app() -> None:
         st.session_state["start_display"] = start_cands[idx]["display"]
         st.session_state["start"] = start_cands[idx]["display"]
     else:
-        st.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
+        err = st.session_state.get("_geocode_error")
+        if err:
+            st.warning("Serviciul de geocodare este indisponibil momentan. Mai încearcă peste câteva secunde sau verifică conexiunea.")
+        else:
+            st.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Opriri
@@ -324,16 +350,15 @@ def run_streamlit_app() -> None:
             st.rerun()
     with top_cols[1]:
         if st.button("🗑️ Șterge toate opririle", key="rm_all_btn", use_container_width=True):
-            # marcăm toate pentru ștergere
             st.session_state["_to_remove"] = list(st.session_state.stops_keys)
 
-    # Afișare opriri (cu delete la dreapta în header-ul cardului)
+    # Afișare opriri
     st.session_state.pop("_to_remove", None)
     for key in list(st.session_state.stops_keys):
         _init_addr_state(key)
         _render_address_row("Adresă", key)
 
-    # Aplicăm ștergerile cerute (colecționate în _to_remove de la butoanele cardurilor)
+    # Aplicăm ștergerile cerute
     remove_list = st.session_state.pop("_to_remove", [])
     if remove_list:
         for k in remove_list:
@@ -408,7 +433,7 @@ def run_streamlit_app() -> None:
             use_container_width=True,
         )
 
-        # Export Excel
+        # Export Excel (TOTAL în foaia principală)
         bio = io.BytesIO()
         try:
             from openpyxl.styles import Font  # type: ignore
@@ -431,9 +456,27 @@ def run_streamlit_app() -> None:
             st.exception(ex)
             st.info("CSV rămâne disponibil pentru descărcare.")
 
+# --- Teste minimale ---
+
+def _run_basic_tests() -> None:
+    assert km_round(12.34, 1) == 12.3
+    assert km_round(12.35, 1) in (12.3, 12.4)
+    key = "Test, RO|3"
+    _GEOCODE_DISK[key] = [{"lat": 44.0, "lon": 26.0, "display": "Test, RO"}]
+    _save_json(CACHE_FILE, _GEOCODE_DISK)
+    reloaded = _load_json(CACHE_FILE)
+    assert key in reloaded
+    rows = [{"Data": "01.01.2025", "Plecare": "A", "Destinație": "B", "Dus-întors": "Nu", "Km parcurși": 12.3}]
+    df = pd.DataFrame(rows)
+    assert list(df.columns) == ["Data", "Plecare", "Destinație", "Dus-întors", "Km parcurși"]
+
 # --- Rulare ---
 if __name__ == "__main__":
+    if "--test" in sys.argv:
+        _run_basic_tests()
+        print("OK: testele de bază au trecut.")
+        sys.exit(0)
     if st is not None:
         run_streamlit_app()
     else:
-        print("Folosește: streamlit run app.py")
+        print("Rulat fără Streamlit (mod CLI). Folosește:  streamlit run app.py")
