@@ -2,7 +2,7 @@
 """
 Foaie de parcurs - calcul automat km (OSRM gratuit)
 Nominatim principal + fallback automat la geocode.maps.co (fără API key).
-Hardenizat pentru cloud: User-Agent cu email (din Secrets), rate-limit, debounce, cache 24h.
+Hardenizat pentru cloud: User-Agent cu email (din Secrets, cu try/except), rate-limit, debounce, cache 24h.
 UI minimalistă + dark mode auto, “Șterge” pe card, “Șterge toate opririle”, export CSV/Excel cu TOTAL km.
 """
 
@@ -94,8 +94,17 @@ OSRM_ROUTE_URL = (
     "{lon1},{lat1};{lon2},{lat2}?overview=full&alternatives=false&steps=false&geometries=geojson"
 )
 
-# UA cu email de contact (recomandat de Nominatim)
-CONTACT_EMAIL = (st.secrets.get("CONTACT_EMAIL") if st is not None and "CONTACT_EMAIL" in st.secrets else "").strip()
+# UA cu email de contact (recomandat de Nominatim) — compatibil local/Cloud
+def _contact_email_from_secrets() -> str:
+    if st is None:
+        return ""
+    try:
+        # dacă nu există secrets, acest bloc nu va arunca în afara funcției
+        return (st.secrets.get("CONTACT_EMAIL", "") or "").strip()
+    except Exception:
+        return ""
+
+CONTACT_EMAIL = _contact_email_from_secrets()
 USER_AGENT = f"FoaieParcursApp/4.3 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
 
 # ratelimiting & debounce
