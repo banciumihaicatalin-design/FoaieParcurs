@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
 Foaie de parcurs - calcul automat km (OSRM gratuit)
-UI minimalistă, mobile-friendly, dark mode auto, ștergere individuală + „Șterge toate opririle”,
-și geocodare robustă (Nominatim -> Photon -> geocode.maps.co; fără crash, warning în UI).
+UI minimalistă, mobile-friendly, dark mode auto, ștergere individuală + „Șterge toate opririle”.
+Geocodare robustă (Nominatim -> Photon -> geocode.maps.co) + Adresar local + Coordonate manuale (Lat/Lon).
 """
 
 from __future__ import annotations
@@ -29,18 +29,15 @@ if st is not None:
     except Exception:
         pass
 
-    # --- stilizare minimalistă & mobile-friendly + dark mode auto ---
     st.markdown(
         """
         <style>
         #MainMenu, header, footer {visibility:hidden;}
         .block-container {padding-top: .75rem; padding-bottom: 5rem; max-width: 920px;}
 
-        /* hit-area mai mare pentru touch */
         input, textarea, .stButton>button, .stSelectbox div[data-baseweb="select"] {min-height: 44px;}
         .stButton>button {border-radius: 10px;}
 
-        /* card / chenar mai clar delimitat */
         .card {
           padding: .9rem 1rem;
           border: 1px solid var(--border, #e6e6e6);
@@ -51,8 +48,6 @@ if st is not None:
         }
         .card-title { font-weight: 700; margin: 0; }
         .muted {color:#666; font-size:.85rem}
-
-        /* buton mic, discret, aliniat la dreapta */
         .tiny-btn button {
           padding: .35rem .6rem !important;
           line-height: 1 !important;
@@ -60,7 +55,6 @@ if st is not None:
           border-radius: 8px !important;
         }
 
-        /* DARK MODE AUTO */
         @media (prefers-color-scheme: dark) {
           :root {
             --bg: #0e1117;
@@ -100,14 +94,15 @@ if st is not None:
 APP_TITLE = "Foaie de parcurs - calcul automat km"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 PHOTON_URL = "https://photon.komoot.io/api/"
+MAPSCO_URL = "https://geocode.maps.co/search"
 OSRM_ROUTE_URL = (
     "https://router.project-osrm.org/route/v1/driving/"
     "{lon1},{lat1};{lon2},{lat2}?overview=full&alternatives=false&steps=false&geometries=geojson"
 )
-USER_AGENT = "FoaieParcursApp/3.4 (+https://github.com/banciumihaicatalin-design/FoaieParcurs)"
+USER_AGENT = "FoaieParcursApp/4.0 (+https://github.com/banciumihaicatalin-design/FoaieParcurs)"
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
 
-# --- Cache ---
+# --- Cache pe disc ---
 def _load_json(path: str) -> dict:
     try:
         if os.path.exists(path):
@@ -125,22 +120,39 @@ def _save_json(path: str, data: dict) -> None:
         pass
 
 _GEOCODE_DISK = _load_json(CACHE_FILE)
+# adresar local: chei "addr:<text exact>" -> {"lat":..,"lon":..,"display":..}
 
 # --- Utilitare ---
 def km_round(x: float, decimals: int = 1) -> float:
     pow10 = 10 ** decimals
     return math.floor(x * pow10 + 0.5) / pow10
 
-# Geocodare robustă cu 3 furnizori + implicit_place="România"
+def _addrbook_get(q: str) -> Optional[Dict]:
+    return _GEOCODE_DISK.get(f"addr:{q}")
+
+def _addrbook_put(q: str, lat: float, lon: float, display: str) -> None:
+    _GEOCODE_DISK[f"addr:{q}"] = {"lat": float(lat), "lon": float(lon), "display": display}
+    _save_json(CACHE_FILE, _GEOCODE_DISK)
+
+# Geocodare robustă cu 3 furnizori + România implicit + adresar local
 def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "România") -> List[Dict]:
     """
+    0) Caută întâi în adresarul local (exact match)
     1) Nominatim (OSM) - retry scurt
     2) Photon (Komoot) - fallback
-    3) geocode.maps.co - fallback final (gratuit, fără cheie)
+    3) geocode.maps.co - fallback final (gratuit)
     Fără excepții în UI: la eșec salvează mesajul în st.session_state["_geocode_error"] și returnează [].
     """
     if implicit_place and (implicit_place.lower() not in q.lower()):
         q = f"{q}, {implicit_place}"
+
+    # 0) Adresar local
+    book_hit = _addrbook_get(q)
+    if book_hit:
+        if st is not None:
+            st.session_state["_geocode_source"] = "adresar"
+            st.session_state.pop("_geocode_error", None)
+        return [book_hit]
 
     key = f"{q}|{limit}"
     if key in _GEOCODE_DISK:
@@ -148,7 +160,7 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "Români
 
     last_err: Optional[Exception] = None
 
-    # 1) Nominatim cu retry (0s, 0.5s)
+    # 1) Nominatim (retry 0s, apoi 0.5s)
     for attempt in range(2):
         try:
             r = requests.get(
@@ -201,10 +213,10 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "Români
     except Exception as e2:
         last_err = last_err or e2
 
-    # 3) geocode.maps.co (gratuit, fără cheie)
+    # 3) geocode.maps.co (gratuit)
     try:
         r = requests.get(
-            "https://geocode.maps.co/search",
+            MAPSCO_URL,
             params={"q": q, "limit": str(limit)},
             headers={"User-Agent": USER_AGENT},
             timeout=10,
@@ -226,7 +238,6 @@ def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "Români
     except Exception as e3:
         last_err = last_err or e3
 
-    # Nu mai dăm crash: doar memorăm eroarea și întoarcem []
     if st is not None and last_err:
         st.session_state["_geocode_error"] = str(last_err)
     return []
@@ -256,6 +267,10 @@ def _init_addr_state(key: str, default_text: str = "") -> None:
     st.session_state.setdefault(f"{key}_lon", None)
     st.session_state.setdefault(f"{key}_display", "")
     st.session_state.setdefault(f"{key}_last_fetch_ts", 0.0)
+    # câmpuri pentru mod manual
+    st.session_state.setdefault(f"{key}_man_lat", None)
+    st.session_state.setdefault(f"{key}_man_lon", None)
+    st.session_state.setdefault(f"{key}_save_to_book", False)
 
 def _refresh_candidates_if_due(key: str) -> None:
     if st is None:
@@ -270,11 +285,41 @@ def _refresh_candidates_if_due(key: str) -> None:
         st.session_state[f"{key}_sel"] = 0
         st.session_state[f"{key}_last_fetch_ts"] = time.time()
 
+def _render_manual_coord_controls(key: str, container) -> None:
+    """Lat/Lon manuale; dacă ambele sunt completate corect, folosim coordonatele și (opțional) salvăm în adresar."""
+    with container.expander("Alternativ: introdu coordonate manual (Lat, Lon)", expanded=False):
+        colA, colB = st.columns(2)
+        with colA:
+            man_lat = st.number_input("Latitudine (ex: 44.4268)", value=st.session_state.get(f"{key}_man_lat") or 0.0, step=0.000001, format="%.6f", key=f"num_lat_{key}")
+        with colB:
+            man_lon = st.number_input("Longitudine (ex: 26.1025)", value=st.session_state.get(f"{key}_man_lon") or 0.0, step=0.000001, format="%.6f", key=f"num_lon_{key}")
+
+        valid = (-90.0 <= man_lat <= 90.0) and (-180.0 <= man_lon <= 180.0) and (abs(man_lat) + abs(man_lon) > 0)
+        st.session_state[f"{key}_man_lat"] = man_lat
+        st.session_state[f"{key}_man_lon"] = man_lon
+
+        if valid:
+            # setăm coordonatele active pentru acest key
+            st.session_state[f"{key}_lat"] = float(man_lat)
+            st.session_state[f"{key}_lon"] = float(man_lon)
+            # nu atingem textinput-ul (ca să nu dăm eroare Streamlit); afișăm display separat
+            st.session_state[f"{key}_display"] = f"{man_lat:.6f}, {man_lon:.6f} (manual)"
+            # opțiune: salvează în adresar sub textul exact introdus
+            lbl = "Salvează aceste coordonate în adresarul local pentru textul introdus mai sus"
+            save = st.checkbox(lbl, value=st.session_state.get(f"{key}_save_to_book", False), key=f"chk_book_{key}")
+            st.session_state[f"{key}_save_to_book"] = save
+            if save:
+                qtext = (st.session_state.get(f"txt_{key}") or "").strip()
+                if len(qtext) >= 3:
+                    _addrbook_put(qtext + ", România", float(man_lat), float(man_lon), qtext + ", România")
+                    st.info("Salvate în adresarul local. Data viitoare nu mai depinzi de internet pentru această adresă.")
+        else:
+            st.caption("<span class='muted'>Completează ambele câmpuri cu valori valide.</span>", unsafe_allow_html=True)
+
 def _render_address_row(label: str, key: str) -> None:
     if st is None:
         return
 
-    # card cu titlu + buton ștergere pe același rând
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     c1, c2 = st.columns([0.8, 0.2])
     with c1:
@@ -282,20 +327,25 @@ def _render_address_row(label: str, key: str) -> None:
     with c2:
         rm = st.button("✖ Șterge", key=f"rm_{key}", use_container_width=True)
 
-    # conținut card (text input + sugestii)
-    st.text_input(label, key=f"txt_{key}")
+    cont = st.container()
+    cont.text_input(label, key=f"txt_{key}")
+
+    # sursa curentă (doar informativ)
     src = st.session_state.get("_geocode_source")
     if src == "photon":
-        st.caption("Sugestii de la Photon (fallback la indisponibilitatea Nominatim)")
+        cont.caption("Sugestii de la Photon (fallback Nominatim)")
     elif src == "nominatim":
-        st.caption("Sugestii de la Nominatim")
+        cont.caption("Sugestii de la Nominatim")
     elif src == "maps.co":
-        st.caption("Sugestii de la geocode.maps.co")
+        cont.caption("Sugestii de la geocode.maps.co")
+    elif src == "adresar":
+        cont.caption("Adresar local (fără internet)")
+
     _refresh_candidates_if_due(key)
     cands = st.session_state.get(f"{key}_cands", [])
     if cands:
         labels = [c["display"] for c in cands]
-        idx = st.selectbox(
+        idx = cont.selectbox(
             "Alege adresa",
             options=list(range(len(labels))),
             format_func=lambda i: labels[i],
@@ -309,12 +359,15 @@ def _render_address_row(label: str, key: str) -> None:
     else:
         err = st.session_state.get("_geocode_error")
         if err:
-            st.warning("Serviciul de geocodare este indisponibil momentan. Mai încearcă peste câteva secunde sau verifică conexiunea.")
+            cont.warning("Serviciul de geocodare este indisponibil momentan. Poți folosi modul cu coordonate manuale de mai jos sau reîncearcă.")
         else:
-            st.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)  # end card
+            cont.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
 
-    # butonul a cerut ștergerea acestui card
+    # controale pentru coordonate manuale (bypass geocodare)
+    _render_manual_coord_controls(key, cont)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
     if rm:
         st.session_state.setdefault("_to_remove", []).append(key)
 
@@ -330,14 +383,14 @@ def run_streamlit_app() -> None:
     st.markdown("#### 📍 Punct de plecare")
     _init_addr_state("start", "Piata Unirii, Bucuresti")
 
-    # card mic doar cu inputul start (fără buton de ștergere)
     st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.text_input("Adresa de plecare", key="txt_start")
+    cont = st.container()
+    cont.text_input("Adresa de plecare", key="txt_start")
     _refresh_candidates_if_due("start")
     start_cands = st.session_state.get("start_cands", [])
     if start_cands:
         labels = [c["display"] for c in start_cands]
-        idx = st.selectbox(
+        idx = cont.selectbox(
             "Alege adresa",
             options=list(range(len(labels))),
             format_func=lambda i: labels[i],
@@ -351,9 +404,12 @@ def run_streamlit_app() -> None:
     else:
         err = st.session_state.get("_geocode_error")
         if err:
-            st.warning("Serviciul de geocodare este indisponibil momentan. Mai încearcă peste câteva secunde sau verifică conexiunea.")
+            cont.warning("Serviciul de geocodare este indisponibil momentan. Poți folosi modul cu coordonate manuale de mai jos sau reîncearcă.")
         else:
-            st.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
+            cont.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
+
+    # coordonate manuale pentru start
+    _render_manual_coord_controls("start", cont)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Opriri
@@ -385,7 +441,7 @@ def run_streamlit_app() -> None:
         for k in remove_list:
             if k in st.session_state.stops_keys:
                 st.session_state.stops_keys.remove(k)
-            for suf in ("_cands", "_sel", "_lat", "_lon", "_display", "_last_fetch_ts", "_query"):
+            for suf in ("_cands", "_sel", "_lat", "_lon", "_display", "_last_fetch_ts", "_query", "_man_lat", "_man_lon", "_save_to_book"):
                 st.session_state.pop(f"{k}{suf}", None)
             st.session_state.pop(f"txt_{k}", None)
         st.rerun()
@@ -394,17 +450,18 @@ def run_streamlit_app() -> None:
     st.markdown("#### 📐 Calcul")
     if st.button("Calculează traseul", key="calc_btn", use_container_width=True):
         pts = []
-        start = {"lat": st.session_state.get("start_lat"), "lon": st.session_state.get("start_lon"), "display": st.session_state.get("start")}
-        if not start["lat"]:
-            st.error("Selectează punctul de plecare.")
+        start = {"lat": st.session_state.get("start_lat"), "lon": st.session_state.get("start_lon"), "display": st.session_state.get("start") or st.session_state.get("start_display")}
+        if not start["lat"] or not start["lon"]:
+            st.error("Selectează punctul de plecare sau introdu coordonatele manual.")
         else:
             pts.append(start)
             for key in st.session_state.stops_keys:
                 lat, lon = st.session_state.get(f"{key}_lat"), st.session_state.get(f"{key}_lon")
+                disp = st.session_state.get(f"{key}_display") or st.session_state.get(key)
                 if lat and lon:
-                    pts.append({"lat": lat, "lon": lon, "display": st.session_state.get(key)})
+                    pts.append({"lat": float(lat), "lon": float(lon), "display": disp or "Punct"})
             if len(pts) < 2:
-                st.error("Adaugă minim o oprire.")
+                st.error("Adaugă minim o oprire (sau coordonatele ei).")
             else:
                 segments = []
                 for i in range(len(pts) - 1):
