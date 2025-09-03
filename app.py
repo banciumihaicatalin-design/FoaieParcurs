@@ -2,7 +2,7 @@
 """
 Foaie de parcurs - calcul automat km (OSRM gratuit)
 UI minimalistă, mobile-friendly, dark mode auto, ștergere individuală + „Șterge toate opririle”.
-Geocodare robustă (Nominatim -> Photon -> geocode.maps.co) + Adresar local + Coordonate manuale (Lat/Lon).
+Geocodare ca înainte: DOAR Nominatim (lista de sugestii sub câmpul de adresă), fără fallback-uri / coordonate manuale.
 """
 
 from __future__ import annotations
@@ -48,12 +48,6 @@ if st is not None:
         }
         .card-title { font-weight: 700; margin: 0; }
         .muted {color:#666; font-size:.85rem}
-        .tiny-btn button {
-          padding: .35rem .6rem !important;
-          line-height: 1 !important;
-          min-height: 32px !important;
-          border-radius: 8px !important;
-        }
 
         @media (prefers-color-scheme: dark) {
           :root {
@@ -93,13 +87,11 @@ if st is not None:
 # --- Constante ---
 APP_TITLE = "Foaie de parcurs - calcul automat km"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-PHOTON_URL = "https://photon.komoot.io/api/"
-MAPSCO_URL = "https://geocode.maps.co/search"
 OSRM_ROUTE_URL = (
     "https://router.project-osrm.org/route/v1/driving/"
     "{lon1},{lat1};{lon2},{lat2}?overview=full&alternatives=false&steps=false&geometries=geojson"
 )
-USER_AGENT = "FoaieParcursApp/4.0 (+https://github.com/banciumihaicatalin-design/FoaieParcurs)"
+USER_AGENT = "FoaieParcursApp/4.1 (+https://github.com/banciumihaicatalin-design/FoaieParcurs)"
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
 
 # --- Cache pe disc ---
@@ -120,126 +112,52 @@ def _save_json(path: str, data: dict) -> None:
         pass
 
 _GEOCODE_DISK = _load_json(CACHE_FILE)
-# adresar local: chei "addr:<text exact>" -> {"lat":..,"lon":..,"display":..}
 
 # --- Utilitare ---
 def km_round(x: float, decimals: int = 1) -> float:
     pow10 = 10 ** decimals
     return math.floor(x * pow10 + 0.5) / pow10
 
-def _addrbook_get(q: str) -> Optional[Dict]:
-    return _GEOCODE_DISK.get(f"addr:{q}")
-
-def _addrbook_put(q: str, lat: float, lon: float, display: str) -> None:
-    _GEOCODE_DISK[f"addr:{q}"] = {"lat": float(lat), "lon": float(lon), "display": display}
-    _save_json(CACHE_FILE, _GEOCODE_DISK)
-
-# Geocodare robustă cu 3 furnizori + România implicit + adresar local
-def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "România") -> List[Dict]:
+# Geocodare simplă: DOAR Nominatim (cu retry discret). Fără fallback-uri.
+def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> List[Dict]:
     """
-    0) Caută întâi în adresarul local (exact match)
-    1) Nominatim (OSM) - retry scurt
-    2) Photon (Komoot) - fallback
-    3) geocode.maps.co - fallback final (gratuit)
-    Fără excepții în UI: la eșec salvează mesajul în st.session_state["_geocode_error"] și returnează [].
+    Returnează candidați de la Nominatim (max `limit`). La erori întoarce [] și pune un warning prietenos în UI.
     """
-    if implicit_place and (implicit_place.lower() not in q.lower()):
-        q = f"{q}, {implicit_place}"
+    q_effective = q.strip()
+    if not q_effective:
+        return []
 
-    # 0) Adresar local
-    book_hit = _addrbook_get(q)
-    if book_hit:
-        if st is not None:
-            st.session_state["_geocode_source"] = "adresar"
-            st.session_state.pop("_geocode_error", None)
-        return [book_hit]
+    # Adaugă implicit_place dacă vrei (lăsat gol ca înainte)
+    if implicit_place and implicit_place.lower() not in q_effective.lower():
+        q_effective = f"{q_effective}, {implicit_place}"
 
-    key = f"{q}|{limit}"
+    key = f"{q_effective}|{limit}"
     if key in _GEOCODE_DISK:
         return _GEOCODE_DISK[key]
 
     last_err: Optional[Exception] = None
-
-    # 1) Nominatim (retry 0s, apoi 0.5s)
-    for attempt in range(2):
+    for attempt in range(2):  # un retry scurt, ca înainte să „meargă”
         try:
             r = requests.get(
                 NOMINATIM_URL,
-                params={"q": q, "format": "json", "limit": limit, "accept-language": "ro"},
+                params={"q": q_effective, "format": "json", "limit": limit, "accept-language": "ro"},
                 headers={"User-Agent": USER_AGENT},
                 timeout=10,
             )
             r.raise_for_status()
             js = r.json()
-            out = [{"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q)} for it in js]
-            if out:
-                _GEOCODE_DISK[key] = out; _save_json(CACHE_FILE, _GEOCODE_DISK)
-                if st is not None:
-                    st.session_state["_geocode_source"] = "nominatim"
-                    st.session_state.pop("_geocode_error", None)
-                return out
+            out = [{"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q_effective)} for it in js]
+            _GEOCODE_DISK[key] = out
+            _save_json(CACHE_FILE, _GEOCODE_DISK)
+            if st is not None:
+                st.session_state.pop("_geocode_error", None)
+            return out
         except Exception as e:
             last_err = e
-            time.sleep(0.5 * attempt)
-
-    # 2) Photon (Komoot)
-    try:
-        r = requests.get(
-            PHOTON_URL,
-            params={"q": q, "limit": limit, "lang": "ro"},
-            headers={"User-Agent": USER_AGENT},
-            timeout=10,
-        )
-        r.raise_for_status()
-        js = r.json()
-        feats = js.get("features", [])
-        out2: List[Dict] = []
-        for f in feats:
-            coords = ((f.get("geometry") or {}).get("coordinates") or [None, None])
-            lon, lat = coords[0], coords[1]
-            props = f.get("properties", {})
-            parts = [props.get("name"), props.get("street"), props.get("housenumber"),
-                     props.get("city"), props.get("county"), props.get("state"),
-                     props.get("country"), props.get("postcode")]
-            disp = ", ".join([str(p) for p in parts if p]) or q
-            if lat is not None and lon is not None:
-                out2.append({"lat": float(lat), "lon": float(lon), "display": disp})
-        if out2:
-            _GEOCODE_DISK[key] = out2; _save_json(CACHE_FILE, _GEOCODE_DISK)
-            if st is not None:
-                st.session_state["_geocode_source"] = "photon"
-                st.session_state.pop("_geocode_error", None)
-            return out2
-    except Exception as e2:
-        last_err = last_err or e2
-
-    # 3) geocode.maps.co (gratuit)
-    try:
-        r = requests.get(
-            MAPSCO_URL,
-            params={"q": q, "limit": str(limit)},
-            headers={"User-Agent": USER_AGENT},
-            timeout=10,
-        )
-        r.raise_for_status()
-        js = r.json() if isinstance(r.json(), list) else []
-        out3: List[Dict] = []
-        for it in js:
-            lat = it.get("lat"); lon = it.get("lon")
-            disp = it.get("display_name") or it.get("name") or q
-            if lat and lon:
-                out3.append({"lat": float(lat), "lon": float(lon), "display": disp})
-        if out3:
-            _GEOCODE_DISK[key] = out3; _save_json(CACHE_FILE, _GEOCODE_DISK)
-            if st is not None:
-                st.session_state["_geocode_source"] = "maps.co"
-                st.session_state.pop("_geocode_error", None)
-            return out3
-    except Exception as e3:
-        last_err = last_err or e3
+            time.sleep(0.4 * attempt)
 
     if st is not None and last_err:
-        st.session_state["_geocode_error"] = str(last_err)
+        st.session_state["_geocode_error"] = "Serviciul de geocodare (Nominatim) nu răspunde momentan."
     return []
 
 def route_osrm(lat1: float, lon1: float, lat2: float, lon2: float) -> Optional[Dict]:
@@ -267,10 +185,6 @@ def _init_addr_state(key: str, default_text: str = "") -> None:
     st.session_state.setdefault(f"{key}_lon", None)
     st.session_state.setdefault(f"{key}_display", "")
     st.session_state.setdefault(f"{key}_last_fetch_ts", 0.0)
-    # câmpuri pentru mod manual
-    st.session_state.setdefault(f"{key}_man_lat", None)
-    st.session_state.setdefault(f"{key}_man_lon", None)
-    st.session_state.setdefault(f"{key}_save_to_book", False)
 
 def _refresh_candidates_if_due(key: str) -> None:
     if st is None:
@@ -278,43 +192,12 @@ def _refresh_candidates_if_due(key: str) -> None:
     q = (st.session_state.get(f"txt_{key}") or "").strip()
     last_q = (st.session_state.get(f"{key}_query") or "").strip()
     if q and q != last_q and len(q) >= 3:
-        st.session_state.pop("_geocode_error", None)  # curățăm eroarea anterioară
-        cands = geocode_osm_candidates(q, limit=6, implicit_place="România")
+        st.session_state.pop("_geocode_error", None)
+        cands = geocode_osm_candidates(q, limit=6, implicit_place="")  # ca înainte: fără „România” implicit
         st.session_state[f"{key}_cands"] = cands
         st.session_state[f"{key}_query"] = q
         st.session_state[f"{key}_sel"] = 0
         st.session_state[f"{key}_last_fetch_ts"] = time.time()
-
-def _render_manual_coord_controls(key: str, container) -> None:
-    """Lat/Lon manuale; dacă ambele sunt completate corect, folosim coordonatele și (opțional) salvăm în adresar."""
-    with container.expander("Alternativ: introdu coordonate manual (Lat, Lon)", expanded=False):
-        colA, colB = st.columns(2)
-        with colA:
-            man_lat = st.number_input("Latitudine (ex: 44.4268)", value=st.session_state.get(f"{key}_man_lat") or 0.0, step=0.000001, format="%.6f", key=f"num_lat_{key}")
-        with colB:
-            man_lon = st.number_input("Longitudine (ex: 26.1025)", value=st.session_state.get(f"{key}_man_lon") or 0.0, step=0.000001, format="%.6f", key=f"num_lon_{key}")
-
-        valid = (-90.0 <= man_lat <= 90.0) and (-180.0 <= man_lon <= 180.0) and (abs(man_lat) + abs(man_lon) > 0)
-        st.session_state[f"{key}_man_lat"] = man_lat
-        st.session_state[f"{key}_man_lon"] = man_lon
-
-        if valid:
-            # setăm coordonatele active pentru acest key
-            st.session_state[f"{key}_lat"] = float(man_lat)
-            st.session_state[f"{key}_lon"] = float(man_lon)
-            # nu atingem textinput-ul (ca să nu dăm eroare Streamlit); afișăm display separat
-            st.session_state[f"{key}_display"] = f"{man_lat:.6f}, {man_lon:.6f} (manual)"
-            # opțiune: salvează în adresar sub textul exact introdus
-            lbl = "Salvează aceste coordonate în adresarul local pentru textul introdus mai sus"
-            save = st.checkbox(lbl, value=st.session_state.get(f"{key}_save_to_book", False), key=f"chk_book_{key}")
-            st.session_state[f"{key}_save_to_book"] = save
-            if save:
-                qtext = (st.session_state.get(f"txt_{key}") or "").strip()
-                if len(qtext) >= 3:
-                    _addrbook_put(qtext + ", România", float(man_lat), float(man_lon), qtext + ", România")
-                    st.info("Salvate în adresarul local. Data viitoare nu mai depinzi de internet pentru această adresă.")
-        else:
-            st.caption("<span class='muted'>Completează ambele câmpuri cu valori valide.</span>", unsafe_allow_html=True)
 
 def _render_address_row(label: str, key: str) -> None:
     if st is None:
@@ -329,17 +212,6 @@ def _render_address_row(label: str, key: str) -> None:
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
-
-    # sursa curentă (doar informativ)
-    src = st.session_state.get("_geocode_source")
-    if src == "photon":
-        cont.caption("Sugestii de la Photon (fallback Nominatim)")
-    elif src == "nominatim":
-        cont.caption("Sugestii de la Nominatim")
-    elif src == "maps.co":
-        cont.caption("Sugestii de la geocode.maps.co")
-    elif src == "adresar":
-        cont.caption("Adresar local (fără internet)")
 
     _refresh_candidates_if_due(key)
     cands = st.session_state.get(f"{key}_cands", [])
@@ -359,12 +231,9 @@ def _render_address_row(label: str, key: str) -> None:
     else:
         err = st.session_state.get("_geocode_error")
         if err:
-            cont.warning("Serviciul de geocodare este indisponibil momentan. Poți folosi modul cu coordonate manuale de mai jos sau reîncearcă.")
+            cont.warning("Serviciul de geocodare (Nominatim) nu răspunde momentan. Reîncearcă într-un minut.")
         else:
             cont.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
-
-    # controale pentru coordonate manuale (bypass geocodare)
-    _render_manual_coord_controls(key, cont)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
@@ -404,12 +273,9 @@ def run_streamlit_app() -> None:
     else:
         err = st.session_state.get("_geocode_error")
         if err:
-            cont.warning("Serviciul de geocodare este indisponibil momentan. Poți folosi modul cu coordonate manuale de mai jos sau reîncearcă.")
+            cont.warning("Serviciul de geocodare (Nominatim) nu răspunde momentan. Reîncearcă într-un minut.")
         else:
             cont.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
-
-    # coordonate manuale pentru start
-    _render_manual_coord_controls("start", cont)
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Opriri
@@ -441,7 +307,7 @@ def run_streamlit_app() -> None:
         for k in remove_list:
             if k in st.session_state.stops_keys:
                 st.session_state.stops_keys.remove(k)
-            for suf in ("_cands", "_sel", "_lat", "_lon", "_display", "_last_fetch_ts", "_query", "_man_lat", "_man_lon", "_save_to_book"):
+            for suf in ("_cands", "_sel", "_lat", "_lon", "_display", "_last_fetch_ts", "_query"):
                 st.session_state.pop(f"{k}{suf}", None)
             st.session_state.pop(f"txt_{k}", None)
         st.rerun()
@@ -452,7 +318,7 @@ def run_streamlit_app() -> None:
         pts = []
         start = {"lat": st.session_state.get("start_lat"), "lon": st.session_state.get("start_lon"), "display": st.session_state.get("start") or st.session_state.get("start_display")}
         if not start["lat"] or not start["lon"]:
-            st.error("Selectează punctul de plecare sau introdu coordonatele manual.")
+            st.error("Selectează punctul de plecare.")
         else:
             pts.append(start)
             for key in st.session_state.stops_keys:
@@ -461,7 +327,7 @@ def run_streamlit_app() -> None:
                 if lat and lon:
                     pts.append({"lat": float(lat), "lon": float(lon), "display": disp or "Punct"})
             if len(pts) < 2:
-                st.error("Adaugă minim o oprire (sau coordonatele ei).")
+                st.error("Adaugă minim o oprire.")
             else:
                 segments = []
                 for i in range(len(pts) - 1):
@@ -538,11 +404,6 @@ def run_streamlit_app() -> None:
 def _run_basic_tests() -> None:
     assert km_round(12.34, 1) == 12.3
     assert km_round(12.35, 1) in (12.3, 12.4)
-    key = "Test, RO|3"
-    _GEOCODE_DISK[key] = [{"lat": 44.0, "lon": 26.0, "display": "Test, RO"}]
-    _save_json(CACHE_FILE, _GEOCODE_DISK)
-    reloaded = _load_json(CACHE_FILE)
-    assert key in reloaded
     rows = [{"Data": "01.01.2025", "Plecare": "A", "Destinație": "B", "Dus-întors": "Nu", "Km parcurși": 12.3}]
     df = pd.DataFrame(rows)
     assert list(df.columns) == ["Data", "Plecare", "Destinație", "Dus-întors", "Km parcurși"]
