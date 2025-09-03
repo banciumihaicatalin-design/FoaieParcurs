@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Foaie de parcurs - calcul automat km (OSRM gratuit)
-Nominatim-only (ca înainte) dar hardenizat pentru cloud: User-Agent cu email, rate-limit, cache 24h, debounce.
-UI minimalistă + dark mode auto, „Șterge” pe card, „Șterge toate opririle”, export CSV/Excel cu TOTAL km.
+Nominatim principal + fallback automat la geocode.maps.co (fără API key).
+Hardenizat pentru cloud: User-Agent cu email (din Secrets), rate-limit, debounce, cache 24h.
+UI minimalistă + dark mode auto, “Șterge” pe card, “Șterge toate opririle”, export CSV/Excel cu TOTAL km.
 """
 
 from __future__ import annotations
@@ -87,16 +88,20 @@ if st is not None:
 # ===========================
 APP_TITLE = "Foaie de parcurs - calcul automat km"
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+MAPSCO_URL = "https://geocode.maps.co/search"
 OSRM_ROUTE_URL = (
     "https://router.project-osrm.org/route/v1/driving/"
     "{lon1},{lat1};{lon2},{lat2}?overview=full&alternatives=false&steps=false&geometries=geojson"
 )
 
-# 1) UA cu email de contact (poți seta în Secrets -> CONTACT_EMAIL)
+# UA cu email de contact (recomandat de Nominatim)
 CONTACT_EMAIL = (st.secrets.get("CONTACT_EMAIL") if st is not None and "CONTACT_EMAIL" in st.secrets else "").strip()
-USER_AGENT = f"FoaieParcursApp/4.2 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
+USER_AGENT = f"FoaieParcursApp/4.3 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
 
-RATE_LIMIT_SECONDS = 1.2   # 2) ratelimiting prietenos
+# ratelimiting & debounce
+RATE_LIMIT_SECONDS = 1.2
+DEBOUNCE_MS = 400
+
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
 
 # ===========================
@@ -127,65 +132,92 @@ def km_round(x: float, decimals: int = 1) -> float:
     pow10 = 10 ** decimals
     return math.floor(x * pow10 + 0.5) / pow10
 
-# ===========================
-#   Geocodare Nominatim (cache 24h + rate-limit + retry)
-# ===========================
-if st is not None:
-    @st.cache_data(ttl=24*3600, show_spinner=False)
-    def _geocode_nominatim_cached(q_effective: str, limit: int) -> List[Dict]:
-        r = requests.get(
-            NOMINATIM_URL,
-            params={"q": q_effective, "format": "json", "limit": limit, "accept-language": "ro"},
-            headers={"User-Agent": USER_AGENT},
-            timeout=10,
-        )
-        r.raise_for_status()
-        js = r.json()
-        return [{"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q_effective)} for it in js]
-else:
-    def _geocode_nominatim_cached(q_effective: str, limit: int) -> List[Dict]:
-        return []
-
 def _respect_rate_limit(tag: str) -> None:
     if st is None:
         return
     key = f"_last_{tag}_ts"
     last = st.session_state.get(key, 0.0)
     now = time.time()
-    delta = now - last
-    if delta < RATE_LIMIT_SECONDS:
-        time.sleep(RATE_LIMIT_SECONDS - delta)
+    if now - last < RATE_LIMIT_SECONDS:
+        time.sleep(RATE_LIMIT_SECONDS - (now - last))
     st.session_state[key] = time.time()
 
-def geocode_osm_candidates(q: str, *, limit: int, implicit_place: str = "") -> List[Dict]:
-    q_effective = q.strip()
-    if not q_effective:
-        return []
-    if implicit_place and implicit_place.lower() not in q_effective.lower():
-        q_effective = f"{q_effective}, {implicit_place}"
+# ===========================
+#   Geocodare (Nominatim + fallback maps.co) cu cache 24h
+# ===========================
+if st is not None:
+    @st.cache_data(ttl=24*3600, show_spinner=False)
+    def _nominatim_cached(q: str, limit: int) -> List[Dict]:
+        r = requests.get(
+            NOMINATIM_URL,
+            params={"q": q, "format": "json", "limit": limit, "accept-language": "ro"},
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+        )
+        r.raise_for_status()
+        js = r.json()
+        return [{"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q)} for it in js]
 
-    # cache pe disc ca back-up (opțional)
-    disk_key = f"{q_effective}|{limit}"
+    @st.cache_data(ttl=24*3600, show_spinner=False)
+    def _mapsco_cached(q: str, limit: int) -> List[Dict]:
+        r = requests.get(
+            MAPSCO_URL,
+            params={"q": q, "limit": str(limit)},
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+        )
+        r.raise_for_status()
+        js = r.json() if isinstance(r.json(), list) else []
+        out: List[Dict] = []
+        for it in js:
+            lat, lon = it.get("lat"), it.get("lon")
+            disp = it.get("display_name") or it.get("name") or q
+            if lat and lon:
+                out.append({"lat": float(lat), "lon": float(lon), "display": disp})
+        return out
+else:
+    def _nominatim_cached(q: str, limit: int) -> List[Dict]: return []
+    def _mapsco_cached(q: str, limit: int) -> List[Dict]: return []
+
+def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
+    q_eff = (q or "").strip()
+    if not q_eff:
+        return []
+
+    disk_key = f"{q_eff}|{limit}"
     if disk_key in _GEOCODE_DISK:
         return _GEOCODE_DISK[disk_key]
 
-    # 3) rate-limit + retry discret
+    # Nominatim -> fallback maps.co
     last_err: Optional[Exception] = None
-    for attempt in range(2):
+    for attempt in range(2):  # mic retry pentru Nominatim
         try:
             _respect_rate_limit("geo")
-            out = _geocode_nominatim_cached(q_effective, int(limit))
-            _GEOCODE_DISK[disk_key] = out
-            _save_json(CACHE_FILE, _GEOCODE_DISK)
+            out = _nominatim_cached(q_eff, int(limit))
             if st is not None:
+                st.session_state["_geocode_source"] = "Nominatim"
                 st.session_state.pop("_geocode_error", None)
+            _GEOCODE_DISK[disk_key] = out; _save_json(CACHE_FILE, _GEOCODE_DISK)
             return out
         except Exception as e:
             last_err = e
             time.sleep(0.5 * attempt)
 
+    # fallback
+    try:
+        _respect_rate_limit("geo")
+        out2 = _mapsco_cached(q_eff, int(limit))
+        if out2:
+            if st is not None:
+                st.session_state["_geocode_source"] = "maps.co"
+                st.session_state.pop("_geocode_error", None)
+            _GEOCODE_DISK[disk_key] = out2; _save_json(CACHE_FILE, _GEOCODE_DISK)
+            return out2
+    except Exception as e2:
+        last_err = last_err or e2
+
     if st is not None and last_err:
-        st.session_state["_geocode_error"] = "Serviciul de geocodare (Nominatim) nu răspunde momentan."
+        st.session_state["_geocode_error"] = "Geocodarea nu este disponibilă momentan."
     return []
 
 # ===========================
@@ -203,8 +235,7 @@ if st is not None:
             return None
         return {"km": routes[0]["distance"] / 1000.0}
 else:
-    def _route_osrm_cached(lat1, lon1, lat2, lon2):
-        return None
+    def _route_osrm_cached(lat1, lon1, lat2, lon2): return None
 
 def route_osrm(lat1: float, lon1: float, lat2: float, lon2: float) -> Optional[Dict]:
     if st is not None:
@@ -228,7 +259,6 @@ def _init_addr_state(key: str, default_text: str = "") -> None:
     st.session_state.setdefault(f"{key}_lon", None)
     st.session_state.setdefault(f"{key}_display", "")
     st.session_state.setdefault(f"{key}_last_fetch_ts", 0.0)
-    st.session_state.setdefault("cfg_debounce_ms", 400)  # 4) debounce real
 
 def _refresh_candidates_if_due(key: str) -> None:
     if st is None:
@@ -236,14 +266,11 @@ def _refresh_candidates_if_due(key: str) -> None:
     q = (st.session_state.get(f"txt_{key}") or "").strip()
     last_q = (st.session_state.get(f"{key}_query") or "").strip()
     if q and q != last_q and len(q) >= 3:
-        # debounce
-        time.sleep((st.session_state.get("cfg_debounce_ms", 400)) / 1000.0)
-        # după pauză, verificăm că nu s-a schimbat din nou
-        q_check = (st.session_state.get(f"txt_{key}") or "").strip()
-        if q_check != q:
-            return  # user încă tastează
+        time.sleep(DEBOUNCE_MS / 1000.0)
+        if (st.session_state.get(f"txt_{key}") or "").strip() != q:
+            return
         st.session_state.pop("_geocode_error", None)
-        cands = geocode_osm_candidates(q, limit=6, implicit_place="")  # ca înainte: fără „România” implicit
+        cands = geocode_candidates(q, limit=6)
         st.session_state[f"{key}_cands"] = cands
         st.session_state[f"{key}_query"] = q
         st.session_state[f"{key}_sel"] = 0
@@ -265,7 +292,10 @@ def _render_address_row(label: str, key: str) -> None:
 
     _refresh_candidates_if_due(key)
     cands = st.session_state.get(f"{key}_cands", [])
+    src = st.session_state.get("_geocode_source")
     if cands:
+        if src:
+            cont.caption(f"Sugestii de la: {src}")
         labels = [c["display"] for c in cands]
         idx = cont.selectbox(
             "Alege adresa",
@@ -281,7 +311,7 @@ def _render_address_row(label: str, key: str) -> None:
     else:
         err = st.session_state.get("_geocode_error")
         if err:
-            cont.warning("Serviciul de geocodare (Nominatim) nu răspunde momentan. Reîncearcă într-un minut.")
+            cont.warning("Geocodarea nu este disponibilă momentan. Reîncearcă în scurt timp.")
         else:
             cont.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
 
@@ -309,7 +339,10 @@ def run_streamlit_app() -> None:
     cont.text_input("Adresa de plecare", key="txt_start")
     _refresh_candidates_if_due("start")
     start_cands = st.session_state.get("start_cands", [])
+    src = st.session_state.get("_geocode_source")
     if start_cands:
+        if src:
+            cont.caption(f"Sugestii de la: {src}")
         labels = [c["display"] for c in start_cands]
         idx = cont.selectbox(
             "Alege adresa",
@@ -325,7 +358,7 @@ def run_streamlit_app() -> None:
     else:
         err = st.session_state.get("_geocode_error")
         if err:
-            cont.warning("Serviciul de geocodare (Nominatim) nu răspunde momentan. Reîncearcă într-un minut.")
+            cont.warning("Geocodarea nu este disponibilă momentan. Reîncearcă în scurt timp.")
         else:
             cont.caption("<span class='muted'>Tastează minim 3 caractere pentru a vedea sugestii.</span>", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
@@ -448,7 +481,7 @@ def run_streamlit_app() -> None:
                 use_container_width=True,
             )
         except Exception as ex:
-            st.warning("Nu am potut genera Excel. Verifică instalarea `openpyxl`. Detalii mai jos.")
+            st.warning("Nu am putut genera Excel. Verifică instalarea `openpyxl`. Detalii mai jos.")
             st.exception(ex)
             st.info("CSV rămâne disponibil pentru descărcare.")
 
