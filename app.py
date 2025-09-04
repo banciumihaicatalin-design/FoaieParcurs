@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Foaie de parcurs - calcul automat km (OSRM gratuit)
-Nominatim principal + fallback automat la geocode.maps.co (fără API key).
-Hardenizat pentru cloud: User-Agent cu email (din Secrets, cu try/except), rate-limit, debounce, cache 24h.
-UI minimalistă + dark mode auto, “Șterge” pe card, “Șterge toate opririle”, export CSV/Excel cu TOTAL km.
+Geocodare impecabilă online:
+ - Preferă LocationIQ dacă e setat LOCATIONIQ_KEY (stabil, fără limitări IP).
+ - Altfel Nominatim (cu email UA, cache 24h, rate limit) -> fallback maps.co.
+UI minimalistă + dark mode auto, „Șterge” pe card, „Șterge toate opririle”,
+export CSV/Excel cu TOTAL km. Debounce & caching pentru stabilitate.
 """
 
 from __future__ import annotations
@@ -84,37 +86,44 @@ if st is not None:
     )
 
 # ===========================
-#   Constante
+#   Constante & Secrets
 # ===========================
 APP_TITLE = "Foaie de parcurs - calcul automat km"
+
+# Geocodare
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
 MAPSCO_URL = "https://geocode.maps.co/search"
+LOCATIONIQ_URL = "https://us1.locationiq.com/v1/search"  # poate fi și eu1; us1 e robust
+
+# Rutare
 OSRM_ROUTE_URL = (
     "https://router.project-osrm.org/route/v1/driving/"
     "{lon1},{lat1};{lon2},{lat2}?overview=full&alternatives=false&steps=false&geometries=geojson"
 )
 
-# UA cu email de contact (recomandat de Nominatim) — compatibil local/Cloud
-def _contact_email_from_secrets() -> str:
+# Secrets în siguranță (nu aruncă local)
+def _secret(name: str, default: str = "") -> str:
     if st is None:
-        return ""
+        return default
     try:
-        # dacă nu există secrets, acest bloc nu va arunca în afara funcției
-        return (st.secrets.get("CONTACT_EMAIL", "") or "").strip()
+        return (st.secrets.get(name, default) or default).strip()
     except Exception:
-        return ""
+        return default
 
-CONTACT_EMAIL = _contact_email_from_secrets()
-USER_AGENT = f"FoaieParcursApp/4.3 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
+CONTACT_EMAIL = _secret("CONTACT_EMAIL", "")
+LOCATIONIQ_KEY = _secret("LOCATIONIQ_KEY", "")  # pune aici cheia ta dacă vrei „impecabil online”
 
-# ratelimiting & debounce
-RATE_LIMIT_SECONDS = 1.2
-DEBOUNCE_MS = 400
+USER_AGENT = f"FoaieParcursApp/4.4 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
 
+# Ratelimit & debounce
+RATE_LIMIT_SECONDS = 1.0
+DEBOUNCE_MS = 350
+
+# Cache pe disc (fallback)
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
 
 # ===========================
-#   Cache pe disc (fallback)
+#   Cache pe disc
 # ===========================
 def _load_json(path: str) -> dict:
     try:
@@ -152,9 +161,17 @@ def _respect_rate_limit(tag: str) -> None:
     st.session_state[key] = time.time()
 
 # ===========================
-#   Geocodare (Nominatim + fallback maps.co) cu cache 24h
+#   Geocodare (LocationIQ -> Nominatim -> maps.co) cu cache 24h
 # ===========================
 if st is not None:
+    @st.cache_data(ttl=24*3600, show_spinner=False)
+    def _locationiq_cached(q: str, limit: int, key: str) -> List[Dict]:
+        params = {"key": key, "q": q, "format": "json", "normalizecity": 1, "limit": str(limit), "accept-language": "ro"}
+        r = requests.get(LOCATIONIQ_URL, params=params, headers={"User-Agent": USER_AGENT}, timeout=10)
+        r.raise_for_status()
+        js = r.json() if isinstance(r.json(), list) else []
+        return [{"lat": float(it["lat"]), "lon": float(it["lon"]), "display": it.get("display_name", q)} for it in js]
+
     @st.cache_data(ttl=24*3600, show_spinner=False)
     def _nominatim_cached(q: str, limit: int) -> List[Dict]:
         r = requests.get(
@@ -169,12 +186,7 @@ if st is not None:
 
     @st.cache_data(ttl=24*3600, show_spinner=False)
     def _mapsco_cached(q: str, limit: int) -> List[Dict]:
-        r = requests.get(
-            MAPSCO_URL,
-            params={"q": q, "limit": str(limit)},
-            headers={"User-Agent": USER_AGENT},
-            timeout=10,
-        )
+        r = requests.get(MAPSCO_URL, params={"q": q, "limit": str(limit)}, headers={"User-Agent": USER_AGENT}, timeout=10)
         r.raise_for_status()
         js = r.json() if isinstance(r.json(), list) else []
         out: List[Dict] = []
@@ -185,6 +197,7 @@ if st is not None:
                 out.append({"lat": float(lat), "lon": float(lon), "display": disp})
         return out
 else:
+    def _locationiq_cached(q: str, limit: int, key: str) -> List[Dict]: return []
     def _nominatim_cached(q: str, limit: int) -> List[Dict]: return []
     def _mapsco_cached(q: str, limit: int) -> List[Dict]: return []
 
@@ -197,9 +210,23 @@ def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
     if disk_key in _GEOCODE_DISK:
         return _GEOCODE_DISK[disk_key]
 
-    # Nominatim -> fallback maps.co
     last_err: Optional[Exception] = None
-    for attempt in range(2):  # mic retry pentru Nominatim
+
+    # 1) LocationIQ dacă ai cheie (stabil online)
+    if LOCATIONIQ_KEY:
+        try:
+            _respect_rate_limit("geo")
+            out = _locationiq_cached(q_eff, int(limit), LOCATIONIQ_KEY)
+            if st is not None:
+                st.session_state["_geocode_source"] = "LocationIQ"
+                st.session_state.pop("_geocode_error", None)
+            _GEOCODE_DISK[disk_key] = out; _save_json(CACHE_FILE, _GEOCODE_DISK)
+            return out
+        except Exception as e_liq:
+            last_err = e_liq  # trecem la următorul
+
+    # 2) Nominatim cu mic retry
+    for attempt in range(2):
         try:
             _respect_rate_limit("geo")
             out = _nominatim_cached(q_eff, int(limit))
@@ -208,11 +235,11 @@ def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
                 st.session_state.pop("_geocode_error", None)
             _GEOCODE_DISK[disk_key] = out; _save_json(CACHE_FILE, _GEOCODE_DISK)
             return out
-        except Exception as e:
-            last_err = e
-            time.sleep(0.5 * attempt)
+        except Exception as e_nom:
+            last_err = e_nom
+            time.sleep(0.4 * attempt)
 
-    # fallback
+    # 3) Fallback maps.co
     try:
         _respect_rate_limit("geo")
         out2 = _mapsco_cached(q_eff, int(limit))
