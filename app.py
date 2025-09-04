@@ -5,6 +5,7 @@ Geocodare robustă online:
  - Preferă LocationIQ dacă există cheie (LOCATIONIQ_TOKEN sau LOCATIONIQ_KEY în Secrets).
  - Altfel Nominatim (UA cu email, cache 24h, rate-limit) -> fallback maps.co.
 UI minimalistă + dark mode auto, „Șterge” pe card, „Șterge toate opririle”, export CSV/Excel cu TOTAL km.
+Butoanele Adăugare/Ștergere opriri sunt poziționate SUB lista de opriri și cardurile sunt numerotate.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ def _secret(name: str, default: str = "") -> str:
 CONTACT_EMAIL  = _secret("CONTACT_EMAIL", "")
 LOCATIONIQ_KEY = _secret("LOCATIONIQ_TOKEN", "") or _secret("LOCATIONIQ_KEY", "")
 
-USER_AGENT = f"FoaieParcursApp/4.5 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
+USER_AGENT = f"FoaieParcursApp/4.6 ({'mailto:'+CONTACT_EMAIL if CONTACT_EMAIL else 'no-contact'})"
 RATE_LIMIT_SECONDS = 1.0
 DEBOUNCE_MS = 350
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
@@ -155,7 +156,6 @@ def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
 
     last_err: Optional[str] = None
 
-    # 1) LocationIQ (dacă există cheie)
     if LOCATIONIQ_KEY:
         try:
             _respect_rate_limit("geo")
@@ -168,7 +168,6 @@ def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
         except Exception as e:
             last_err = f"LocationIQ: {e}"
 
-    # 2) Nominatim
     for attempt in range(2):
         try:
             _respect_rate_limit("geo")
@@ -182,7 +181,6 @@ def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
             last_err = f"Nominatim: {e}"
             time.sleep(0.4 * attempt)
 
-    # 3) maps.co
     try:
         _respect_rate_limit("geo")
         out2 = _mapsco_cached(q_eff, int(limit))
@@ -196,8 +194,7 @@ def geocode_candidates(q: str, limit: int = 6) -> List[Dict]:
         last_err = last_err or f"maps.co: {e2}"
 
     if st is not None and last_err:
-        st.session_state["_geocode_error"] = "Geocodarea nu este disponibilă momentan. " \
-                                             "Provideri încercați: " + last_err
+        st.session_state["_geocode_error"] = "Geocodarea nu este disponibilă momentan. Provideri încercați: " + last_err
     return []
 
 # ---------------- Rutare OSRM ----------------
@@ -241,16 +238,21 @@ def _refresh_candidates_if_due(key: str) -> None:
         st.session_state[f"{key}_sel"] = 0
         st.session_state[f"{key}_last_fetch_ts"] = time.time()
 
-def _render_address_row(label: str, key: str) -> None:
+def _render_address_row(label: str, key: str, index: int) -> None:
+    """Afișează un card pentru o oprire numerotată."""
     if st is None: return
     st.markdown("<div class='card'>", unsafe_allow_html=True)
+
     c1, c2 = st.columns([0.8, 0.2])
-    with c1: st.markdown("<p class='card-title'>Adresă</p>", unsafe_allow_html=True)
-    with c2: rm = st.button("✖ Șterge", key=f"rm_{key}", use_container_width=True)
+    with c1:
+        st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
+    with c2:
+        rm = st.button("✖ Șterge", key=f"rm_{key}", use_container_width=True)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
     _refresh_candidates_if_due(key)
+
     cands = st.session_state.get(f"{key}_cands", [])
     src = st.session_state.get("_geocode_source")
     if cands:
@@ -259,14 +261,19 @@ def _render_address_row(label: str, key: str) -> None:
         idx = cont.selectbox("Alege adresa", options=list(range(len(labels))),
                              format_func=lambda i: labels[i], index=st.session_state.get(f"{key}_sel", 0),
                              key=f"sel_{key}")
-        st.session_state[f"{key}_lat"] = cands[idx]["lat"]; st.session_state[f"{key}_lon"] = cands[idx]["lon"]
-        st.session_state[f"{key}_display"] = cands[idx]["display"]; st.session_state[key] = cands[idx]["display"]
+        st.session_state[f"{key}_lat"] = cands[idx]["lat"]
+        st.session_state[f"{key}_lon"] = cands[idx]["lon"]
+        st.session_state[f"{key}_display"] = cands[idx]["display"]
+        st.session_state[key] = cands[idx]["display"]
     else:
         err = st.session_state.get("_geocode_error")
         if err: cont.warning(err)
         else: cont.caption("<span class='muted'>Tastează minim 3 caractere pentru sugestii.</span>", unsafe_allow_html=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
-    if rm: st.session_state.setdefault("_to_remove", []).append(key)
+
+    if rm:
+        st.session_state.setdefault("_to_remove", []).append(key)
 
 # ---------------- APP ----------------
 def run_streamlit_app() -> None:
@@ -276,52 +283,71 @@ def run_streamlit_app() -> None:
 
     st.title("🚗 Foaie de parcurs")
 
+    # Punct de plecare
     st.markdown("#### 📍 Punct de plecare")
     _init_addr_state("start", "Piata Unirii, Bucuresti")
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     cont = st.container()
     cont.text_input("Adresa de plecare", key="txt_start")
-    _refresh_candidates_if_due("start")
-    start_cands = st.session_state.get("start_cands", [])
-    src = st.session_state.get("_geocode_source")
-    if start_cands:
-        if src: cont.caption(f"Sugestii de la: {src}")
-        labels = [c["display"] for c in start_cands]
-        idx = cont.selectbox("Alege adresa", options=list(range(len(labels))),
-                             format_func=lambda i: labels[i], index=st.session_state.get("start_sel", 0),
-                             key="sel_start")
-        st.session_state["start_lat"] = start_cands[idx]["lat"]; st.session_state["start_lon"] = start_cands[idx]["lon"]
-        st.session_state["start_display"] = start_cands[idx]["display"]; st.session_state["start"] = start_cands[idx]["display"]
-    else:
-        err = st.session_state.get("_geocode_error")
-        if err: cont.warning(err)
-        else: cont.caption("<span class='muted'>Tastează minim 3 caractere pentru sugestii.</span>", unsafe_allow_html=True)
+    # geocode pentru start
+    def _render_start():
+        _refresh_candidates_if_due("start")
+        start_cands = st.session_state.get("start_cands", [])
+        src = st.session_state.get("_geocode_source")
+        if start_cands:
+            if src: cont.caption(f"Sugestii de la: {src}")
+            labels = [c["display"] for c in start_cands]
+            idx = cont.selectbox("Alege adresa", options=list(range(len(labels))),
+                                 format_func=lambda i: labels[i], index=st.session_state.get("start_sel", 0),
+                                 key="sel_start")
+            st.session_state["start_lat"] = start_cands[idx]["lat"]
+            st.session_state["start_lon"] = start_cands[idx]["lon"]
+            st.session_state["start_display"] = start_cands[idx]["display"]
+            st.session_state["start"] = start_cands[idx]["display"]
+        else:
+            err = st.session_state.get("_geocode_error")
+            if err: cont.warning(err)
+            else: cont.caption("<span class='muted'>Tastează minim 3 caractere pentru sugestii.</span>",
+                               unsafe_allow_html=True)
+    _render_start()
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Opriri
     st.markdown("#### 🛑 Opriri")
     if "stops_keys" not in st.session_state:
-        st.session_state.stops_keys = ["stop_0"]; _init_addr_state("stop_0", "")
-    top = st.columns([0.6, 0.4])
-    with top[0]:
+        st.session_state.stops_keys = ["stop_0"]
+        _init_addr_state("stop_0", "")
+
+    # Afișăm toate opririle (numerotate)
+    st.session_state.pop("_to_remove", None)
+    for idx, key in enumerate(list(st.session_state.stops_keys)):
+        _init_addr_state(key)
+        _render_address_row("Adresă", key, idx)
+
+    # Butoanele sunt SUB lista de opriri (aici), deci rămân tot timpul la îndemână
+    btn_cols = st.columns([0.6, 0.4])
+    with btn_cols[0]:
         if st.button("➕ Adăugare oprire", key="add_stop_btn", use_container_width=True):
-            k = f"stop_{len(st.session_state.stops_keys)}"
-            st.session_state.stops_keys.append(k); _init_addr_state(k, ""); st.rerun()
-    with top[1]:
+            new_key = f"stop_{len(st.session_state.stops_keys)}"
+            st.session_state.stops_keys.append(new_key)
+            _init_addr_state(new_key, "")
+            st.rerun()
+    with btn_cols[1]:
         if st.button("🗑️ Șterge toate opririle", key="rm_all_btn", use_container_width=True):
             st.session_state["_to_remove"] = list(st.session_state.stops_keys)
 
-    st.session_state.pop("_to_remove", None)
-    for key in list(st.session_state.stops_keys):
-        _init_addr_state(key); _render_address_row("Adresă", key)
-
-    rmv = st.session_state.pop("_to_remove", [])
-    if rmv:
-        for k in rmv:
-            if k in st.session_state.stops_keys: st.session_state.stops_keys.remove(k)
-            for suf in ("_cands","_sel","_lat","_lon","_display","_last_fetch_ts","_query"): st.session_state.pop(f"{k}{suf}", None)
+    # Aplicăm ștergerile cerute (individuale sau toate)
+    remove_list = st.session_state.pop("_to_remove", [])
+    if remove_list:
+        for k in remove_list:
+            if k in st.session_state.stops_keys:
+                st.session_state.stops_keys.remove(k)
+            for suf in ("_cands","_sel","_lat","_lon","_display","_last_fetch_ts","_query"):
+                st.session_state.pop(f"{k}{suf}", None)
             st.session_state.pop(f"txt_{k}", None)
         st.rerun()
 
+    # Calcul
     st.markdown("#### 📐 Calcul")
     if st.button("Calculează traseul", key="calc_btn", use_container_width=True):
         pts = []
@@ -334,55 +360,80 @@ def run_streamlit_app() -> None:
             for key in st.session_state.stops_keys:
                 lat, lon = st.session_state.get(f"{key}_lat"), st.session_state.get(f"{key}_lon")
                 disp = st.session_state.get(f"{key}_display") or st.session_state.get(key)
-                if lat and lon: pts.append({"lat": float(lat), "lon": float(lon), "display": disp or "Punct"})
+                if lat and lon:
+                    pts.append({"lat": float(lat), "lon": float(lon), "display": disp or "Punct"})
             if len(pts) < 2:
                 st.error("Adaugă minim o oprire.")
             else:
-                segs, total = [], 0.0
-                for i in range(len(pts)-1):
-                    a, b = pts[i], pts[i+1]
+                segments = []
+                for i in range(len(pts) - 1):
+                    a, b = pts[i], pts[i + 1]
                     res = route_osrm(a["lat"], a["lon"], b["lat"], b["lon"]) or {}
                     km = km_round(float(res.get("km", 0.0)), 1)
-                    segs.append({"from": a["display"], "to": b["display"], "km_oneway": km})
-                st.session_state["segments"] = segs; st.session_state["calc_date"] = date.today()
+                    segments.append({"from": a["display"], "to": b["display"], "km_oneway": km})
+                st.session_state["segments"] = segments
+                st.session_state["calc_date"] = date.today()
                 st.success("Traseul a fost recalculat. Poți bifa acum dus-întors pe segmente și exporta.")
 
+    # Segmente + export
     if st.session_state.get("segments"):
         st.markdown("#### 🧭 Segmente")
-        segs = st.session_state["segments"]; data_foaie = st.session_state.get("calc_date", date.today())
-        total, rows = 0.0, []
-        for i, seg in enumerate(segs):
+        segments = st.session_state["segments"]
+        data_foaie = st.session_state.get("calc_date", date.today())
+        total = 0.0
+        rows = []
+        for i, seg in enumerate(segments):
             c1, c2 = st.columns([0.7, 0.3])
             with c1: st.markdown(f"• <b>{seg['from']}</b> → <b>{seg['to']}</b>", unsafe_allow_html=True)
-            with c2: checked = st.checkbox("dus-întors", key=f"seg_rt_{i}", value=st.session_state.get(f"seg_rt_{i}", False))
-            effective = seg["km_oneway"] * (2 if checked else 1); total += effective
+            with c2: checked = st.checkbox("dus-întors", key=f"seg_rt_{i}",
+                                           value=st.session_state.get(f"seg_rt_{i}", False))
+            effective = seg["km_oneway"] * (2 if checked else 1)
+            total += effective
             st.markdown(f"<span class='muted'>Distanță: <b>{effective} km</b></span>", unsafe_allow_html=True)
-            rows.append({"Data": data_foaie.strftime("%d.%m.%Y"), "Plecare": seg["from"], "Destinație": seg["to"],
-                        "Dus-întors": "Da" if checked else "Nu", "Km parcurși": effective})
+            rows.append({
+                "Data": data_foaie.strftime("%d.%m.%Y"),
+                "Plecare": seg["from"],
+                "Destinație": seg["to"],
+                "Dus-întors": "Da" if checked else "Nu",
+                "Km parcurși": effective,
+            })
         st.success(f"Total km: {total}")
-        df = pd.DataFrame(rows); st.dataframe(df, use_container_width=True)
 
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True)
+
+        # Export CSV
         csv_bytes = df.to_csv(index=False).encode("utf-8-sig")
-        st.download_button("⬇️ Descarcă CSV", csv_bytes,
-                           file_name=f"foaie_parcurs_{data_foaie.strftime('%Y%m%d')}.csv",
-                           mime="text/csv", use_container_width=True)
+        st.download_button(
+            "⬇️ Descarcă CSV",
+            csv_bytes,
+            file_name=f"foaie_parcurs_{data_foaie.strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
+        # Export Excel (TOTAL în foaia principală)
         bio = io.BytesIO()
         try:
             from openpyxl.styles import Font
             with pd.ExcelWriter(bio, engine="openpyxl") as writer:
                 df.to_excel(writer, index=False, sheet_name="Foaie de parcurs")
-                ws = writer.sheets["Foaie de parcurs"]; last_row = ws.max_row + 1
+                ws = writer.sheets["Foaie de parcurs"]
+                last_row = ws.max_row + 1
                 ws.cell(row=last_row, column=4, value="TOTAL km").font = Font(bold=True)
                 ws.cell(row=last_row, column=5, value=total).font = Font(bold=True)
             bio.seek(0)
-            st.download_button("⬇️ Descarcă Excel", bio.getvalue(),
-                               file_name=f"foaie_parcurs_{data_foaie.strftime('%Y%m%d')}.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                               use_container_width=True)
+            st.download_button(
+                "⬇️ Descarcă Excel",
+                bio.getvalue(),
+                file_name=f"foaie_parcurs_{data_foaie.strftime('%Y%m%d')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+            )
         except Exception as ex:
             st.warning("Nu am putut genera Excel. Verifică `openpyxl`. Detalii:")
-            st.exception(ex); st.info("CSV rămâne disponibil.")
+            st.exception(ex)
+            st.info("CSV rămâne disponibil.")
 
 # ---------------- Teste minime ----------------
 def _run_basic_tests() -> None:
