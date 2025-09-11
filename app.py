@@ -46,7 +46,7 @@ if st is not None:
           box-shadow:0 1px 3px rgba(0,0,0,.04);
           margin-bottom:.8rem;
         }
-        .card-title {font-weight:700; margin:0; display:inline-block;}
+        .card-title {font-weight:700; margin:0; display:inline-block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
         .muted {color:#666; font-size:.9rem}
 
         /* inputuri & selecturi îngrijite */
@@ -75,11 +75,18 @@ if st is not None:
         .op-row [data-testid="stHorizontalBlock"]{
           flex-wrap: nowrap !important;
           align-items: center !important;
-          gap: .35rem !important;
+          gap: .25rem !important;
         }
+        .op-row{margin-bottom:.25rem;}
         .op-row .stButton>button{
-          width:28px!important; height:28px!important; min-height:28px!important; border-radius:999px!important;
-          padding:0!important; line-height:1!important; font-size:16px!important;
+          width:24px!important; height:24px!important; min-height:24px!important; border-radius:999px!important;
+          padding:0!important; line-height:1!important; font-size:14px!important;
+        }
+        @media (max-width: 420px){
+          .block-container{padding-left:.6rem; padding-right:.6rem;}
+          .op-row [data-testid="stHorizontalBlock"]{gap:.2rem!important;}
+          .op-row .stButton>button{width:22px!important; height:22px!important; min-height:22px!important; font-size:13px!important;}
+          .card-title{font-size:0.95rem;}
         }
 
         /* Dark mode auto */
@@ -383,7 +390,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
 
     # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
     st.markdown("<div class='op-row'>", unsafe_allow_html=True)
-    col_title, col_up, col_down, col_rm, col_sp = st.columns([0.65, 0.08, 0.08, 0.08, 0.11])
+    col_title, col_up, col_down, col_rm = st.columns([0.76, 0.08, 0.08, 0.08])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with col_up:
