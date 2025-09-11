@@ -417,34 +417,34 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     if st is None: return
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-    # Titlu + trigger absolut în același rând (funcționează și pe telefon)
-    st.markdown("<div class='op-wrap'>", unsafe_allow_html=True)
-    st.markdown(f"<p class='card-title op-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
-    try:
-        with st.popover("⋮"):
-            st.caption("Acțiuni")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
-                    _move_stop(index, index-1); st.rerun()
-            with c2:
-                if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
-                    _move_stop(index, index+1); st.rerun()
-            with c3:
-                if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
-                    st.session_state.setdefault("_to_remove", []).append(key)
-    except Exception:
-        # fallback: trei butoane simple (tot absolut în dreapta)
-        bcol = st.columns([1])[0]
-        with bcol:
-            c1, c2, c3 = st.columns(3)
-            if c1.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
+    # Titlu + trigger pe ACELAȘI rând, inclusiv pe telefon (marker + columns; vezi CSS .op-row-marker)
+    st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
+    ctitle, cactions = st.columns([0.80, 0.20])
+    with ctitle:
+        st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
+    with cactions:
+        try:
+            with st.popover("⋮"):
+                st.caption("Acțiuni")
+                u, d, x = st.columns(3)
+                with u:
+                    if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
+                        _move_stop(index, index-1); st.rerun()
+                with d:
+                    if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
+                        _move_stop(index, index+1); st.rerun()
+                with x:
+                    if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+                        st.session_state.setdefault("_to_remove", []).append(key)
+        except Exception:
+            # fallback: trei butoane simple, rămân pe același rând datorită CSS aplicat pe containerul de columns
+            u, d, x = st.columns(3)
+            if u.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
                 _move_stop(index, index-1); st.rerun()
-            if c2.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
+            if d.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
                 _move_stop(index, index+1); st.rerun()
-            if c3.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+            if x.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
                 st.session_state.setdefault("_to_remove", []).append(key)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
