@@ -85,29 +85,37 @@ if st is not None:
           width:20px!important; height:20px!important; min-height:20px!important; border-radius:999px!important;
           padding:0!important; line-height:1!important; font-size:12px!important;
         }
-        /* Hack: marker + sibling selector ca să prindem blocul de coloane generat de st.columns */
+        /* Hack: marker + sibling selector ca să prindem blocul de coloane generat de st.columns
+           și să forțăm o singură linie inclusiv pe iPhone */
         .op-row-marker + div [data-testid="stHorizontalBlock"]{
+          display:flex !important;
           flex-wrap: nowrap !important;
           align-items: center !important;
-          gap: .2rem !important;
+          gap: .15rem !important;
         }
         .op-row-marker + div [data-testid="column"]{
-          flex:0 0 auto !important; width:auto !important; min-width:auto !important;
+          display: inline-flex !important;
+          align-items: center !important;
+          justify-content: flex-end !important;
+          flex: 0 0 auto !important;
+          width: auto !important;
+          min-width: 24px !important; /* previne ruperea pe rând nou */
         }
         .op-row-marker + div [data-testid="column"]:first-child{
-          flex:1 1 auto !important; min-width:0 !important;
+          flex: 1 1 0% !important; /* titlul ia cât spațiu are */
+          min-width: 0 !important;  /* permite micșorarea pe ecrane înguste */
+          justify-content: flex-start !important;
         }
+        /* eliminăm spațiul vertical implicit al butoanelor care împinge pe rând nou */
+        .op-row-marker + div .stButton{margin-bottom:0 !important;}
         .op-row-marker + div .stButton>button{
-          width:20px!important; height:20px!important; min-height:20px!important; border-radius:999px!important;
+          width:18px!important; height:18px!important; min-height:18px!important; border-radius:999px!important;
           padding:0!important; line-height:1!important; font-size:12px!important;
         }
         @media (max-width: 480px){
           .block-container{padding-left:.5rem; padding-right:.5rem;}
-          .op-row [data-testid="stHorizontalBlock"]{gap:.15rem!important;}
-          .op-row .stButton>button{width:20px!important; height:20px!important; min-height:20px!important; font-size:12px!important;}
-          .card-title{font-size:0.95rem;}
-          .op-row-marker + div [data-testid="stHorizontalBlock"]{gap:.15rem!important;}
-          .op-row-marker + div .stButton>button{width:20px!important; height:20px!important; min-height:20px!important; font-size:12px!important;}
+          .op-row-marker + div [data-testid="stHorizontalBlock"]{gap:.12rem!important;}
+          .op-row-marker + div .stButton>button{width:18px!important; height:18px!important; min-height:18px!important; font-size:12px!important;}
         }
 
         /* Dark mode auto */
@@ -411,7 +419,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
 
     # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
     st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
-    col_title, col_up, col_down, col_rm = st.columns([0.80, 0.07, 0.07, 0.06])
+    col_title, col_up, col_down, col_rm = st.columns([0.84, 0.06, 0.06, 0.04])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with col_up:
