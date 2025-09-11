@@ -417,20 +417,38 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     if st is None: return
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-    # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
+    # Titlu + meniu acțiuni compact (popover) pe UN SINGUR rând, sigur pe mobil
     st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
-    col_title, col_up, col_down, col_rm = st.columns([0.84, 0.06, 0.06, 0.04])
+    col_title, col_act = st.columns([0.9, 0.1])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
-    with col_up:
-        if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
-            _move_stop(index, index-1); st.rerun()
-    with col_down:
-        if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
-            _move_stop(index, index+1); st.rerun()
-    with col_rm:
-        if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
-            st.session_state.setdefault("_to_remove", []).append(key)
+    with col_act:
+        # un singur trigger minim, care încape pe o linie; acțiunile sunt în popover
+        try:
+            with st.popover("⋮"):
+                st.caption("Acțiuni")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
+                        _move_stop(index, index-1); st.rerun()
+                with c2:
+                    if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
+                        _move_stop(index, index+1); st.rerun()
+                with c3:
+                    if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+                        st.session_state.setdefault("_to_remove", []).append(key)
+        except Exception:
+            # fallback dacă st.popover nu e disponibil: afișăm butoanele ca înainte, dar într-un singur col
+            c_up, c_down, c_rm = st.columns(3)
+            with c_up:
+                if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
+                    _move_stop(index, index-1); st.rerun()
+            with c_down:
+                if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
+                    _move_stop(index, index+1); st.rerun()
+            with c_rm:
+                if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+                    st.session_state.setdefault("_to_remove", []).append(key)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
