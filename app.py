@@ -71,51 +71,40 @@ if st is not None:
         .btnrow .stButton>button:active {transform:scale(.97);}
         .btnrow + div {margin-top:.2rem;}
 
-        /* Forțăm titlul + butoanele pe UN SINGUR rând inclusiv pe telefon */
-        .op-row{margin-bottom:.2rem; white-space:nowrap;}
-        .op-row [data-testid="stHorizontalBlock"]{
-          flex-wrap: nowrap !important;
+        /* Forțăm un singur rând pentru titlu + trigger (inclusiv pe iPhone): trecem containerul pe CSS GRID */
+        .op-row{margin-bottom:.2rem;}
+        /* Blocul orizontal generat imediat după markerul nostru */
+        .op-row-marker + div [data-testid="stHorizontalBlock"]{
+          display: grid !important;
+          grid-template-columns: 1fr auto !important; /* titlu | buton */
           align-items: center !important;
           gap: .2rem !important;
+          flex-wrap: nowrap !important; /* în caz că Grid e ignorat de o temă */
         }
-        /* Coloană titlu = flexibilă, butoane = lățime auto și NU sar pe rândul următor */
-        .op-row [data-testid="column"]{flex:0 0 auto !important; width:auto !important; min-width: auto !important;}
-        .op-row [data-testid="column"]:first-child{flex:1 1 auto !important; min-width:0 !important;}
-        .op-row .stButton>button{
-          width:20px!important; height:20px!important; min-height:20px!important; border-radius:999px!important;
-          padding:0!important; line-height:1!important; font-size:12px!important;
-        }
-        /* Hack: marker + sibling selector ca să prindem blocul de coloane generat de st.columns
-           și să forțăm o singură linie inclusiv pe iPhone */
-        .op-row-marker + div [data-testid="stHorizontalBlock"]{
-          display:flex !important;
-          flex-wrap: nowrap !important;
-          align-items: center !important;
-          gap: .15rem !important;
-        }
+        /* Coloanele interne: prima se întinde, a doua este doar cât triggerul */
         .op-row-marker + div [data-testid="column"]{
-          display: inline-flex !important;
-          align-items: center !important;
-          justify-content: flex-end !important;
-          flex: 0 0 auto !important;
-          width: auto !important;
-          min-width: 24px !important; /* previne ruperea pe rând nou */
+          width: auto !important; min-width: 0 !important; padding: 0 !important;
         }
-        .op-row-marker + div [data-testid="column"]:first-child{
-          flex: 1 1 0% !important; /* titlul ia cât spațiu are */
-          min-width: 0 !important;  /* permite micșorarea pe ecrane înguste */
-          justify-content: flex-start !important;
+        .op-row-marker + div [data-testid="column"]:first-child{ /* titlul */
+          justify-content: flex-start !important; align-items: center !important;
         }
-        /* eliminăm spațiul vertical implicit al butoanelor care împinge pe rând nou */
-        .op-row-marker + div .stButton{margin-bottom:0 !important;}
-        .op-row-marker + div .stButton>button{
-          width:18px!important; height:18px!important; min-height:18px!important; border-radius:999px!important;
-          padding:0!important; line-height:1!important; font-size:12px!important;
+        .op-row-marker + div [data-testid="column"]:last-child{ /* acțiuni */
+          justify-content: flex-end !important; align-items: center !important;
         }
+        /* Butonul trigger: mic, rotund */
+        .op-row-marker + div .stPopover > div > button, /* streamlit >=1.36 */
+        .op-row-marker + div .stButton>button{ 
+          border-radius:999px!important; width:24px!important; height:24px!important; min-height:24px!important;
+          padding:0!important; line-height:1!important; font-size:14px!important;
+        }
+        /* Eliminăm marginile care împing elementele pe rând nou */
+        .op-row-marker + div .stPopover, .op-row-marker + div .stButton{ margin: 0 !important; }
+
         @media (max-width: 480px){
           .block-container{padding-left:.5rem; padding-right:.5rem;}
-          .op-row-marker + div [data-testid="stHorizontalBlock"]{gap:.12rem!important;}
-          .op-row-marker + div .stButton>button{width:18px!important; height:18px!important; min-height:18px!important; font-size:12px!important;}
+          .op-row-marker + div [data-testid="stHorizontalBlock"]{ gap:.12rem!important; }
+          .op-row-marker + div .stPopover > div > button,
+          .op-row-marker + div .stButton>button{ width:22px!important; height:22px!important; min-height:22px!important; font-size:13px!important; }
         }
 
         /* Dark mode auto */
@@ -419,7 +408,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
 
     # Titlu + meniu acțiuni compact (popover) pe UN SINGUR rând, sigur pe mobil
     st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
-    col_title, col_act = st.columns([0.9, 0.1])
+    col_title, col_act = st.columns([0.88, 0.12])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with col_act:
