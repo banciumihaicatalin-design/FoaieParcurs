@@ -71,21 +71,24 @@ if st is not None:
         .btnrow .stButton>button:active {transform:scale(.97);}
         .btnrow + div {margin-top:.2rem;}
 
-        /* Forțăm titlul + butoanele (oprire) pe un singur rând inclusiv pe mobil */
+        /* Forțăm titlul + butoanele pe UN SINGUR rând inclusiv pe telefon */
+        .op-row{margin-bottom:.2rem; white-space:nowrap;}
         .op-row [data-testid="stHorizontalBlock"]{
           flex-wrap: nowrap !important;
           align-items: center !important;
-          gap: .25rem !important;
+          gap: .2rem !important;
         }
-        .op-row{margin-bottom:.25rem;}
+        /* Coloană titlu = flexibilă, butoane = lățime auto și NU sar pe rândul următor */
+        .op-row [data-testid="column"]{flex:0 0 auto !important; width:auto !important; min-width: auto !important;}
+        .op-row [data-testid="column"]:first-child{flex:1 1 auto !important; min-width:0 !important;}
         .op-row .stButton>button{
-          width:24px!important; height:24px!important; min-height:24px!important; border-radius:999px!important;
-          padding:0!important; line-height:1!important; font-size:14px!important;
+          width:20px!important; height:20px!important; min-height:20px!important; border-radius:999px!important;
+          padding:0!important; line-height:1!important; font-size:12px!important;
         }
-        @media (max-width: 420px){
-          .block-container{padding-left:.6rem; padding-right:.6rem;}
-          .op-row [data-testid="stHorizontalBlock"]{gap:.2rem!important;}
-          .op-row .stButton>button{width:22px!important; height:22px!important; min-height:22px!important; font-size:13px!important;}
+        @media (max-width: 480px){
+          .block-container{padding-left:.5rem; padding-right:.5rem;}
+          .op-row [data-testid="stHorizontalBlock"]{gap:.15rem!important;}
+          .op-row .stButton>button{width:20px!important; height:20px!important; min-height:20px!important; font-size:12px!important;}
           .card-title{font-size:0.95rem;}
         }
 
@@ -390,7 +393,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
 
     # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
     st.markdown("<div class='op-row'>", unsafe_allow_html=True)
-    col_title, col_up, col_down, col_rm = st.columns([0.76, 0.08, 0.08, 0.08])
+    col_title, col_up, col_down, col_rm = st.columns([0.80, 0.07, 0.07, 0.06])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with col_up:
