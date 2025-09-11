@@ -71,6 +71,17 @@ if st is not None:
         .btnrow .stButton>button:active {transform:scale(.97);}
         .btnrow + div {margin-top:.2rem;}
 
+        /* Forțăm titlul + butoanele (oprire) pe un singur rând inclusiv pe mobil */
+        .op-row [data-testid="stHorizontalBlock"]{
+          flex-wrap: nowrap !important;
+          align-items: center !important;
+          gap: .35rem !important;
+        }
+        .op-row .stButton>button{
+          width:28px!important; height:28px!important; min-height:28px!important; border-radius:999px!important;
+          padding:0!important; line-height:1!important; font-size:16px!important;
+        }
+
         /* Dark mode auto */
         @media (prefers-color-scheme: dark){
           :root{--bg:#0e1117;--fg:#e6e6e6;--card:#161a23;--muted:#a3a3a3;--border:#2b3040;}
@@ -371,6 +382,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
     # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
+    st.markdown("<div class='op-row'>", unsafe_allow_html=True)
     col_title, col_up, col_down, col_rm, col_sp = st.columns([0.65, 0.08, 0.08, 0.08, 0.11])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
@@ -383,6 +395,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     with col_rm:
         if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
             st.session_state.setdefault("_to_remove", []).append(key)
+    st.markdown("</div>", unsafe_allow_html=True)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
