@@ -681,12 +681,20 @@ def run_streamlit_app() -> None:
 
         for i, seg in enumerate(segments):
             c1, c2 = st.columns([0.7, 0.3])
-            with c1: st.markdown(f"• <b>{seg['from']}</b> → <b>{seg['to']}</b>", unsafe_allow_html=True)
-            with c2: checked = st.checkbox("dus-întors", key=f"seg_rt_{i}",
-                                           value=st.session_state.get(f"seg_rt_{i}", False))
-            effective = seg["km_oneway"] * (2 if checked else 1)
+            with c1:
+                st.markdown(f"• <b>{seg['from']}</b> → <b>{seg['to']}</b>", unsafe_allow_html=True)
+            with c2:
+                checked = st.checkbox("dus-întors", key=f"seg_rt_{i}", value=st.session_state.get(f"seg_rt_{i}", False))
+                reps = st.number_input(
+                    "×", min_value=1, max_value=50, step=1,
+                    key=f"seg_rep_{i}", value=st.session_state.get(f"seg_rep_{i}", 1)
+                )
+            effective = seg["km_oneway"] * (2 if checked else 1) * int(reps)
             total += effective
-            st.markdown(f"<span class='muted'>Distanță: <b>{effective} km</b></span>", unsafe_allow_html=True)
+            st.markdown(
+                f"<span class='muted'>Distanță (×{int(reps)}): <b>{effective} km</b></span>",
+                unsafe_allow_html=True,
+            )
             rows.append({
                 "Data": data_foaie.strftime("%d.%m.%Y"),
                 "Plecare": seg["from"],
@@ -694,6 +702,7 @@ def run_streamlit_app() -> None:
                 "Dus-întors": "Da" if checked else "Nu",
                 "Km parcurși": effective,
             })
+
 
         st.success(f"Total km: {total}")
 
