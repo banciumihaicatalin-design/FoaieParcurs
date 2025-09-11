@@ -85,11 +85,29 @@ if st is not None:
           width:20px!important; height:20px!important; min-height:20px!important; border-radius:999px!important;
           padding:0!important; line-height:1!important; font-size:12px!important;
         }
+        /* Hack: marker + sibling selector ca să prindem blocul de coloane generat de st.columns */
+        .op-row-marker + div [data-testid="stHorizontalBlock"]{
+          flex-wrap: nowrap !important;
+          align-items: center !important;
+          gap: .2rem !important;
+        }
+        .op-row-marker + div [data-testid="column"]{
+          flex:0 0 auto !important; width:auto !important; min-width:auto !important;
+        }
+        .op-row-marker + div [data-testid="column"]:first-child{
+          flex:1 1 auto !important; min-width:0 !important;
+        }
+        .op-row-marker + div .stButton>button{
+          width:20px!important; height:20px!important; min-height:20px!important; border-radius:999px!important;
+          padding:0!important; line-height:1!important; font-size:12px!important;
+        }
         @media (max-width: 480px){
           .block-container{padding-left:.5rem; padding-right:.5rem;}
           .op-row [data-testid="stHorizontalBlock"]{gap:.15rem!important;}
           .op-row .stButton>button{width:20px!important; height:20px!important; min-height:20px!important; font-size:12px!important;}
           .card-title{font-size:0.95rem;}
+          .op-row-marker + div [data-testid="stHorizontalBlock"]{gap:.15rem!important;}
+          .op-row-marker + div .stButton>button{width:20px!important; height:20px!important; min-height:20px!important; font-size:12px!important;}
         }
 
         /* Dark mode auto */
@@ -392,7 +410,7 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
     # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
-    st.markdown("<div class='op-row'>", unsafe_allow_html=True)
+    st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
     col_title, col_up, col_down, col_rm = st.columns([0.80, 0.07, 0.07, 0.06])
     with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
@@ -405,7 +423,6 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     with col_rm:
         if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
             st.session_state.setdefault("_to_remove", []).append(key)
-    st.markdown("</div>", unsafe_allow_html=True)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
