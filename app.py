@@ -370,23 +370,19 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     if st is None: return
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-    # Rândul de titlu cu butoane rotunde la dreapta
-    ctitle, cactions = st.columns([0.78, 0.22])
-    with ctitle:
+    # Titlu + butoane pe UN SINGUR rând (inclusiv pe mobil)
+    col_title, col_up, col_down, col_rm, col_sp = st.columns([0.65, 0.08, 0.08, 0.08, 0.11])
+    with col_title:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
-    with cactions:
-        st.markdown("<div class='btnrow'>", unsafe_allow_html=True)
-        c_up, c_down, c_rm = st.columns(3)
-        with c_up:
-            if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
-                _move_stop(index, index-1); st.rerun()
-        with c_down:
-            if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
-                _move_stop(index, index+1); st.rerun()
-        with c_rm:
-            if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
-                st.session_state.setdefault("_to_remove", []).append(key)
-        st.markdown("</div>", unsafe_allow_html=True)
+    with col_up:
+        if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
+            _move_stop(index, index-1); st.rerun()
+    with col_down:
+        if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
+            _move_stop(index, index+1); st.rerun()
+    with col_rm:
+        if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+            st.session_state.setdefault("_to_remove", []).append(key)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
