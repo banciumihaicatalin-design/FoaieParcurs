@@ -431,14 +431,14 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     with cactions:
         cdup, crm = st.columns(2)
         with cdup:
-            if st.button("⧉", key=f"dup_{key}", help="Duplică oprirea", type="secondary"):
+            if st.button("⧉", key=f"dup_{key}_{index}", help="Duplică oprirea", type="secondary"):
                 # creează o nouă oprire cu același text ca aceasta
                 new_key = f"stop_{len(st.session_state.stops_keys)}"
                 st.session_state.stops_keys.append(new_key)
                 _init_addr_state(new_key, st.session_state.get(f"txt_{key}") or st.session_state.get(key) or "")
                 st.rerun()
         with crm:
-            if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+            if st.button("✖", key=f"rm_{key}_{index}", help="Șterge oprirea", type="secondary"):
                 st.session_state.setdefault("_to_remove", []).append(key)
 
     cont = st.container()
