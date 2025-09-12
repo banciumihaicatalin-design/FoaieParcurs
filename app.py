@@ -56,65 +56,32 @@ if st is not None:
           border:1px solid var(--border,#e6e6e6)!important;
         }
 
-        /* --- bara de acțiuni a opririi (⬆️ ⬇️ ✖) --- */
-        .btnrow {display:flex; justify-content:flex-end; align-items:center; gap:.35rem;}
-        .btnrow .stButton>button {
-          border-radius:999px!important;   /* rotund */
-          width:32px!important;
-          height:32px!important;
-          min-height:32px!important;
-          padding:0!important;
-          line-height:1!important;
-          font-size:16px!important;        /* pentru emoji/icon */
-        }
-        .btnrow .stButton>button:hover {filter:brightness(1.08);}
-        .btnrow .stButton>button:active {transform:scale(.97);}
-        .btnrow + div {margin-top:.2rem;}
 
-        /* Forțăm un singur rând pentru titlu + trigger (inclusiv pe iPhone): trecem containerul pe CSS GRID */
-        .op-row{margin-bottom:.2rem;}
-        /* Blocul orizontal generat imediat după markerul nostru */
+        /* Titlu + buton (ștergere) pe un singur rând: grid 1fr auto */
         .op-row-marker + div [data-testid="stHorizontalBlock"]{
           display: grid !important;
-          grid-template-columns: 1fr auto !important; /* titlu | buton */
+          grid-template-columns: 1fr auto !important; /* titlu | acțiune */
           align-items: center !important;
           gap: .2rem !important;
-          flex-wrap: nowrap !important; /* în caz că Grid e ignorat de o temă */
         }
-        /* Coloanele interne: prima se întinde, a doua este doar cât triggerul */
         .op-row-marker + div [data-testid="column"]{
           width: auto !important; min-width: 0 !important; padding: 0 !important;
         }
-        .op-row-marker + div [data-testid="column"]:first-child{ /* titlul */
+        .op-row-marker + div [data-testid="column"]:first-child{ /* titlu */
           justify-content: flex-start !important; align-items: center !important;
         }
-        .op-row-marker + div [data-testid="column"]:last-child{ /* acțiuni */
+        .op-row-marker + div [data-testid="column"]:last-child{ /* acțiune */
           justify-content: flex-end !important; align-items: center !important;
         }
-        /* Butonul trigger: mic, rotund */
-        .op-row-marker + div .stPopover > div > button, /* streamlit >=1.36 */
-        .op-row-marker + div .stButton>button{ 
+        /* Buton mic, rotund */
+        .op-row-marker + div .stButton>button{
           border-radius:999px!important; width:24px!important; height:24px!important; min-height:24px!important;
           padding:0!important; line-height:1!important; font-size:14px!important;
+          margin:0!important;
         }
-        /* Eliminăm marginile care împing elementele pe rând nou */
-        .op-row-marker + div .stPopover, .op-row-marker + div .stButton{ margin: 0 !important; }
-
-        /* Wrapper cu poziționare absolută pentru trigger ca să stea pe același rând cu titlul și pe telefoane */
-        .op-wrap{ position: relative; padding-right: 34px; }
-        .op-wrap .op-title{ margin-right: .5rem; display:inline-block; }
-        .op-wrap .stPopover > div > button, /* streamlit >=1.36 */
-        .op-wrap .stButton>button{
-          position: absolute !important; top: 0 !important; right: 0 !important;
-          border-radius:999px!important; width:24px!important; height:24px!important; min-height:24px!important;
-          padding:0!important; line-height:1!important; font-size:14px!important;
-        }
-        @media (max-width: 480px){ .op-wrap{ padding-right: 28px; } }
-
         @media (max-width: 480px){
           .block-container{padding-left:.5rem; padding-right:.5rem;}
           .op-row-marker + div [data-testid="stHorizontalBlock"]{ gap:.12rem!important; }
-          .op-row-marker + div .stPopover > div > button,
           .op-row-marker + div .stButton>button{ width:22px!important; height:22px!important; min-height:22px!important; font-size:13px!important; }
         }
 
@@ -417,34 +384,14 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     if st is None: return
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-    # Titlu + trigger pe ACELAȘI rând, inclusiv pe telefon (marker + columns; vezi CSS .op-row-marker)
+    # Titlu + buton ștergere pe același rând (fără reordonare)
     st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
-    ctitle, cactions = st.columns([0.80, 0.20])
+    ctitle, cactions = st.columns([0.9, 0.1])
     with ctitle:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with cactions:
-        try:
-            with st.popover("⋮"):
-                st.caption("Acțiuni")
-                u, d, x = st.columns(3)
-                with u:
-                    if st.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
-                        _move_stop(index, index-1); st.rerun()
-                with d:
-                    if st.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
-                        _move_stop(index, index+1); st.rerun()
-                with x:
-                    if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
-                        st.session_state.setdefault("_to_remove", []).append(key)
-        except Exception:
-            # fallback: trei butoane simple, rămân pe același rând datorită CSS aplicat pe containerul de columns
-            u, d, x = st.columns(3)
-            if u.button("⬆️", key=f"up_{key}", help="Mută în sus", type="secondary"):
-                _move_stop(index, index-1); st.rerun()
-            if d.button("⬇️", key=f"down_{key}", help="Mută în jos", type="secondary"):
-                _move_stop(index, index+1); st.rerun()
-            if x.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
-                st.session_state.setdefault("_to_remove", []).append(key)
+        if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+            st.session_state.setdefault("_to_remove", []).append(key)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
