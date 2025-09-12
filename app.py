@@ -39,15 +39,48 @@ if st is not None:
 
         /* card standard */
         .card {
-          padding:.9rem 1rem;
-          border:1px solid var(--border,#e6e6e6);
-          border-radius:14px;
-          background:var(--card,#fff);
-          box-shadow:0 1px 3px rgba(0,0,0,.04);
-          margin-bottom:.8rem;
+          /* minimalist: fără contur și fără fundal pentru a elimina liniile de sub secțiuni */
+          padding:.2rem 0 1rem 0;
+          border: none !important;
+          border-radius: 0 !important;
+          background: transparent !important;
+          box-shadow: none !important;
+          margin: 0 0 .6rem 0;
+        }
+        /* spațiere verticală mai compactă între elementele din secțiuni */
+        .card :is([data-testid="stMarkdownContainer"], [data-testid="stTextInput"], [data-testid="stSelectbox"], [data-testid="stDateInput"]) {
+          margin-top: .25rem !important;
         }
         .card-title {font-weight:700; margin:0; display:inline-block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
         .muted {color:#666; font-size:.9rem}
+
+        /* elimină liniile (underline) implicite de sub titluri */
+        h1, h2, h3, h4, h5, h6 {
+          border-bottom: none !important;
+          box-shadow: none !important;
+          padding-bottom: 0 !important;
+          margin-bottom: .4rem !important;
+        }
+        /* Elimină complet decorațiile/divizoarele pe heading-urile Streamlit */
+        [data-testid="stHeading"] hr,
+        [data-testid="stHeading"] div[role="separator"],
+        [data-testid="stHeadingWithDivider"],
+        [data-testid="stMarkdownContainer"] hr,
+        .stHeadingContainer hr { display: none !important; }
+        .section { border: none !important; box-shadow: none !important; padding: 0 !important; margin: 0 0 .4rem 0 !important; font-weight: 700; }
+        /* ascunde orice <hr> orizontal */
+        hr { display: none !important; }
+        /* unele versiuni Streamlit aplică linii via pseudo-elemente */
+        [data-testid="stHeader"] div:after,
+        .block-container h1:after,
+        .block-container h2:after,
+        .block-container h3:after,
+        .block-container h4:after,
+        .block-container h5:after,
+        .block-container h6:after {
+          content: none !important;
+          border: none !important;
+        }
 
         /* inputuri & selecturi îngrijite */
         input, textarea, .stSelectbox div[role="button"], .stSelectbox input {min-height:44px;}
@@ -562,7 +595,7 @@ def run_streamlit_app() -> None:
         st.markdown(f"<span class='muted'>Sursă geocodare curentă: <b>{src_badge}</b></span>", unsafe_allow_html=True)
 
     # Data foiii — CARD minimalist
-    st.markdown("#### 🗓️ Data foii")
+    st.markdown("<h4 class='section'>🗓️ Data foii</h4>", unsafe_allow_html=True)
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.session_state.setdefault("calc_date", date.today())
     st.session_state["calc_date"] = st.date_input("Alege data foii", value=st.session_state["calc_date"]) 
@@ -601,7 +634,7 @@ def run_streamlit_app() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     # TRASEU — totul într-un singur card logic: start, opriri, acțiuni, opțiuni, buton calculează
-    st.markdown("#### 🧭 Traseu")
+    st.markdown("<h4 class='section'>🧭 Traseu</h4>", unsafe_allow_html=True)
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
     # Punct de plecare
@@ -645,11 +678,27 @@ def run_streamlit_app() -> None:
         if st.button("Adaugă aceste opriri", key="bulk_add_btn"):
             lines = [ln.strip() for ln in (bulk_txt or "").splitlines()]
             lines = [ln for ln in lines if ln]
-            for ln in lines:
+            # 1) completează întâi opririle deja existente care sunt goale
+            empty_keys = [
+                k for k in st.session_state.get("stops_keys", [])
+                if not (st.session_state.get(f"txt_{k}") or st.session_state.get(k) or "").strip()
+            ]
+            i = 0
+            for k in empty_keys:
+                if i >= len(lines):
+                    break
+                ln = lines[i]; i += 1
+                # setăm textul pentru oprirea goală înainte de instanțierea widgetului (la rerun)
+                st.session_state[f"txt_{k}"] = ln
+                # curățăm candidații pentru a forța geocodarea fresh
+                for suf in ("_cands","_sel","_lat","_lon","_display","_last_fetch_ts","_query"):
+                    st.session_state.pop(f"{k}{suf}", None)
+            # 2) dacă mai rămân adrese, le adăugăm ca opriri noi
+            for ln in lines[i:]:
                 new_key = f"stop_{len(st.session_state.stops_keys)}"
                 st.session_state.stops_keys.append(new_key)
                 _init_addr_state(new_key, ln)
-            # setăm un flag pentru a goli câmpul la următorul rerun, înainte de a crea widgetul
+            # golim textarea în siguranță la următorul rerun
             st.session_state["_bulk_clear"] = True
             st.rerun()
 
@@ -743,7 +792,7 @@ def run_streamlit_app() -> None:
 
     # Segmente + hartă + export
     if st.session_state.get("segments"):
-        st.markdown("#### 🧭 Segmente")
+        st.markdown("<h4 class='section'>🧭 Segmente</h4>", unsafe_allow_html=True)
         segments = st.session_state["segments"]
         data_foaie = st.session_state.get("calc_date", date.today())
         total = 0.0
@@ -789,7 +838,7 @@ def run_streamlit_app() -> None:
         st.success(f"Total km: {total}")
 
         # Hartă interactivă (traseu evidențiat)
-        st.markdown("#### 🗺️ Hartă traseu")
+        st.markdown("<h4 class='section'>🗺️ Hartă traseu</h4>", unsafe_allow_html=True)
         _render_map(points_for_map, st.session_state.get("paths", []))
 
         # Tabel + export
