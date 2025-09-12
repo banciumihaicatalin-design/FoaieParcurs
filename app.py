@@ -705,6 +705,7 @@ def run_streamlit_app() -> None:
                 "Plecare": seg["from"],
                 "Destinație": seg["to"],
                 "Dus-întors": "Da" if checked else "Nu",
+                "Înmulțiri (×)": int(reps),
                 "Km parcurși": effective,
             })
 
@@ -767,8 +768,8 @@ def run_streamlit_app() -> None:
 def _run_basic_tests() -> None:
     assert km_round(12.34, 1) == 12.3
     assert km_round(12.35, 1) in (12.3, 12.4)
-    df = pd.DataFrame([{"Data":"01.01.2025","Plecare":"A","Destinație":"B","Dus-întors":"Nu","Km parcurși":12.3}])
-    assert list(df.columns)==["Data","Plecare","Destinație","Dus-întors","Km parcurși"]
+    df = pd.DataFrame([{"Data":"01.01.2025","Plecare":"A","Destinație":"B","Dus-întors":"Nu","Înmulțiri (×)":2,"Km parcurși":24.6}])
+    assert list(df.columns)==["Data","Plecare","Destinație","Dus-întors","Înmulțiri (×)","Km parcurși"]
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
