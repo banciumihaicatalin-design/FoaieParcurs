@@ -79,9 +79,15 @@ if st is not None:
           padding:0!important; line-height:1!important; font-size:14px!important;
           margin:0!important;
         }
+        /* butoane mici pentru acțiuni (duplică/șterge) */
+        .op-row-marker + div .stButton>button{
+          width:24px!important; height:24px!important; min-height:24px!important; border-radius:999px!important;
+          padding:0!important; line-height:1!important; font-size:14px!important; margin:0!important;
+        }
         @media (max-width: 480px){
           .block-container{padding-left:.5rem; padding-right:.5rem;}
           .op-row-marker + div [data-testid="stHorizontalBlock"]{ gap:.12rem!important; }
+          .op-row-marker + div .stButton>button{ width:22px!important; height:22px!important; min-height:22px!important; font-size:13px!important; }
           .op-row-marker + div .stButton>button{ width:22px!important; height:22px!important; min-height:22px!important; font-size:13px!important; }
         }
 
@@ -132,6 +138,10 @@ DEBOUNCE_MS = 350
 CACHE_FILE = os.path.expanduser("~/.foaieparcurs_cache.json")
 FAV_FILE   = os.path.expanduser("~/.foaieparcurs_fav.json")
 
+# --- Route cache config ---
+ROUTE_CACHE_FILE = os.path.expanduser("~/.foaieparcurs_routes.json")
+PATH_SUBSAMPLE_STEP = 3  # păstrăm fiecare al 3-lea punct din geometrie pentru hartă
+
 # ---------------- Cache pe disc ----------------
 def _load_json(path: str) -> dict:
     try:
@@ -147,6 +157,13 @@ def _save_json(path: str, data: dict) -> None:
 
 _GEOCODE_DISK = _load_json(CACHE_FILE)
 _FAV_LOCAL = _load_json(FAV_FILE)
+_ROUTE_DISK = _load_json(ROUTE_CACHE_FILE)
+
+def _round5(x: float) -> float:
+    return float(f"{x:.5f}")
+
+def _route_key(lat1: float, lon1: float, lat2: float, lon2: float) -> str:
+    return f"{_round5(lat1)},{_round5(lon1)}->{_round5(lat2)},{_round5(lon2)}"
 
 # ---------------- Utilitare ----------------
 def km_round(x: float, decimals: int = 1) -> float:
@@ -276,9 +293,21 @@ else:
     def _route_osrm_cached(lat1, lon1, lat2, lon2): return None
 
 def route_osrm(lat1: float, lon1: float, lat2: float, lon2: float) -> Optional[Dict]:
-    if st is not None: _respect_rate_limit("route")
-    try: return _route_osrm_cached(float(lat1), float(lon1), float(lat2), float(lon2))
-    except Exception: return None
+    if st is not None:
+        _respect_rate_limit("route")
+    try:
+        k = _route_key(float(lat1), float(lon1), float(lat2), float(lon2))
+        if k in _ROUTE_DISK:
+            return _ROUTE_DISK[k]
+        res = _route_osrm_cached(float(lat1), float(lon1), float(lat2), float(lon2))
+        if res is not None:
+            if res.get("coords"):
+                res = {**res, "coords": _simplify_coords(res["coords"], PATH_SUBSAMPLE_STEP)}
+            _ROUTE_DISK[k] = res
+            _save_json(ROUTE_CACHE_FILE, _ROUTE_DISK)
+        return res
+    except Exception:
+        return None
 
 def route_osrm_retry(lat1: float, lon1: float, lat2: float, lon2: float, tries: int = 2) -> Optional[Dict]:
     """Mic retry pentru hipo de rețea/serviciu."""
@@ -289,6 +318,16 @@ def route_osrm_retry(lat1: float, lon1: float, lat2: float, lon2: float, tries: 
             return res
         time.sleep(0.3)
     return res
+
+# --- Simplifier for route coordinates ---
+def _simplify_coords(coords: List[List[float]], step: int = PATH_SUBSAMPLE_STEP) -> List[List[float]]:
+    if not coords or step <= 1:
+        return coords
+    out = coords[::max(1, int(step))]
+    # asigurăm că ultimul punct rămâne inclus
+    if out and coords[-1] != out[-1]:
+        out.append(coords[-1])
+    return out
 
 # ---------------- Favorite (local + Google Sheets hook) ----------------
 def _fav_local_all() -> Dict[str, Dict]:
@@ -384,14 +423,23 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     if st is None: return
     st.markdown("<div class='card'>", unsafe_allow_html=True)
 
-    # Titlu + buton ștergere pe același rând (fără reordonare)
+    # Titlu + butoane duplică/șterge pe același rând (fără reordonare)
     st.markdown("<div class='op-row-marker'></div>", unsafe_allow_html=True)
-    ctitle, cactions = st.columns([0.9, 0.1])
+    ctitle, cactions = st.columns([0.85, 0.15])
     with ctitle:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with cactions:
-        if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
-            st.session_state.setdefault("_to_remove", []).append(key)
+        cdup, crm = st.columns(2)
+        with cdup:
+            if st.button("⧉", key=f"dup_{key}", help="Duplică oprirea", type="secondary"):
+                # creează o nouă oprire cu același text ca aceasta
+                new_key = f"stop_{len(st.session_state.stops_keys)}"
+                st.session_state.stops_keys.append(new_key)
+                _init_addr_state(new_key, st.session_state.get(f"txt_{key}") or st.session_state.get(key) or "")
+                st.rerun()
+        with crm:
+            if st.button("✖", key=f"rm_{key}", help="Șterge oprirea", type="secondary"):
+                st.session_state.setdefault("_to_remove", []).append(key)
 
     cont = st.container()
     cont.text_input(label, key=f"txt_{key}")
@@ -509,17 +557,56 @@ def run_streamlit_app() -> None:
         return
 
     st.title("🚗 Foaie de parcurs")
+    src_badge = st.session_state.get("_geocode_source")
+    if src_badge:
+        st.markdown(f"<span class='muted'>Sursă geocodare curentă: <b>{src_badge}</b></span>", unsafe_allow_html=True)
 
-    # Data foii de parcurs (un singur câmp)
+    # Data foiii — CARD minimalist
     st.markdown("#### 🗓️ Data foii")
-    with st.container():
-        st.session_state.setdefault("calc_date", date.today())
-        st.session_state["calc_date"] = st.date_input("Alege data foii", value=st.session_state["calc_date"])
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.session_state.setdefault("calc_date", date.today())
+    st.session_state["calc_date"] = st.date_input("Alege data foii", value=st.session_state["calc_date"]) 
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # FAVORITE (ascuns sub buton) — plasat sub secțiunea Data foii
+    with st.expander("⭐ Favorite", expanded=False):
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        fav_col1, fav_col2 = st.columns([0.7, 0.3])
+        with fav_col1:
+            fav_name = st.text_input("Nume traseu favorit")
+        with fav_col2:
+            if st.button("💾 Salvează", use_container_width=True):
+                payload = _fav_payload_from_state()
+                payload["name"] = fav_name.strip() or f"traseu-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+                _fav_local_save(payload["name"], payload)
+                saved_remote = False
+                if bool(GSPREAD_SERVICE_ACCOUNT_JSON and GOOGLE_SHEET_ID):
+                    saved_remote = _fav_sheet_append(payload)
+                if saved_remote:
+                    st.success(f"Favoritul „{payload['name']}” a fost salvat local și în Google Sheets.")
+                else:
+                    st.success(f"Favoritul „{payload['name']}” a fost salvat local.")
+        local_favs = sorted(_FAV_LOCAL.keys())
+        lf1, lf2, lf3 = st.columns([0.6, 0.2, 0.2])
+        with lf1:
+            sel_fav = st.selectbox("Alege favorit", options=["(none)"]+local_favs)
+        with lf2:
+            if st.button("↩️ Încarcă", use_container_width=True, disabled=(sel_fav=="(none)")):
+                _fav_apply_to_state(_FAV_LOCAL.get(sel_fav, {}))
+                st.rerun()
+        with lf3:
+            if st.button("🗑️ Șterge favorit", use_container_width=True, disabled=(sel_fav=="(none)")):
+                _fav_local_delete(sel_fav)
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # TRASEU — totul într-un singur card logic: start, opriri, acțiuni, opțiuni, buton calculează
+    st.markdown("#### 🧭 Traseu")
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
 
     # Punct de plecare
-    st.markdown("#### 📍 Punct de plecare")
+    st.markdown("**📍 Punct de plecare**")
     _init_addr_state("start", "Piata Unirii, Bucuresti")
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
     cont = st.container()
     cont.text_input("Adresa de plecare", key="txt_start")
     _refresh_candidates_if_due("start")
@@ -539,32 +626,60 @@ def run_streamlit_app() -> None:
         err = st.session_state.get("_geocode_error")
         if err: cont.warning(err)
         else: cont.caption("<span class='muted'>Tastează minim 3 caractere pentru sugestii.</span>", unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Opriri + reordonare ↑↓
-    st.markdown("#### 🛑 Opriri")
+
+    # Opriri
+    st.markdown("**🛑 Opriri**")
     if "stops_keys" not in st.session_state:
         st.session_state.stops_keys = ["stop_0"]
         _init_addr_state("stop_0", "")
+
+    # Adăugare multiplă (expander) — deasupra primei opriri
+    with st.expander("➕ Adaugă mai multe opriri deodată"):
+        # inițializăm / golim în siguranță valoarea înainte de a instanția widgetul
+        st.session_state.setdefault("bulk_add_text", "")
+        if st.session_state.get("_bulk_clear", False):
+            st.session_state["bulk_add_text"] = ""
+            st.session_state["_bulk_clear"] = False
+        bulk_txt = st.text_area("Introdu adrese (câte una pe linie)", key="bulk_add_text")
+        if st.button("Adaugă aceste opriri", key="bulk_add_btn"):
+            lines = [ln.strip() for ln in (bulk_txt or "").splitlines()]
+            lines = [ln for ln in lines if ln]
+            for ln in lines:
+                new_key = f"stop_{len(st.session_state.stops_keys)}"
+                st.session_state.stops_keys.append(new_key)
+                _init_addr_state(new_key, ln)
+            # setăm un flag pentru a goli câmpul la următorul rerun, înainte de a crea widgetul
+            st.session_state["_bulk_clear"] = True
+            st.rerun()
 
     st.session_state.pop("_to_remove", None)
     for idx, key in enumerate(list(st.session_state.stops_keys)):
         _init_addr_state(key)
         _render_address_row("Adresă", key, idx, len(st.session_state.stops_keys))
 
-    # Butoane SUB lista de opriri
-    btn_cols = st.columns([0.5, 0.5])
-    with btn_cols[0]:
+    # Acțiuni pentru opriri: adaugă / șterge toate (cu confirmare)
+    act1, act2 = st.columns([0.5, 0.5])
+    with act1:
         if st.button("➕ Adăugare oprire", key="add_stop_btn", use_container_width=True):
             new_key = f"stop_{len(st.session_state.stops_keys)}"
             st.session_state.stops_keys.append(new_key)
             _init_addr_state(new_key, "")
             st.rerun()
-    with btn_cols[1]:
-        if st.button("🗑️ Șterge toate opririle", key="rm_all_btn", use_container_width=True):
+    with act2:
+        st.session_state.setdefault("confirm_rm_all", False)
+        st.session_state["confirm_rm_all"] = st.checkbox("Confirmă ștergerea tuturor", value=False, key="confirm_rm_all_cb")
+        if st.button("🗑️ Șterge toate opririle", key="rm_all_btn", use_container_width=True, disabled=not st.session_state["confirm_rm_all"]):
             st.session_state["_to_remove"] = list(st.session_state.stops_keys)
+            st.session_state["confirm_rm_all"] = False
 
-    # Aplicăm ștergerile
+
+    # Opțiuni traseu
+    st.markdown("**⚙️ Opțiuni traseu**")
+    close_loop = st.checkbox("Revenire la punctul de plecare (închidere circuit)")
+    st.session_state["close_loop"] = bool(close_loop)
+
+    # Aplicăm ștergerile (după acțiuni)
     remove_list = st.session_state.pop("_to_remove", [])
     if remove_list:
         for k in remove_list:
@@ -575,46 +690,9 @@ def run_streamlit_app() -> None:
             st.session_state.pop(f"txt_{k}", None)
         st.rerun()
 
-    # Închidere circuit
-    st.markdown("#### ⚙️ Opțiuni")
-    close_loop = st.checkbox("Revenire la punctul de plecare (închidere circuit)")
-    st.session_state["close_loop"] = bool(close_loop)
-
-    # Favorite (local + hook Sheets)
-    st.markdown("#### ⭐ Favorite")
-    fav_col1, fav_col2 = st.columns([0.7, 0.3])
-    with fav_col1:
-        fav_name = st.text_input("Nume traseu favorit")
-    with fav_col2:
-        if st.button("💾 Salvează", use_container_width=True):
-            payload = _fav_payload_from_state()
-            payload["name"] = fav_name.strip() or f"traseu-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-            _fav_local_save(payload["name"], payload)
-            saved_remote = False
-            if bool(GSPREAD_SERVICE_ACCOUNT_JSON and GOOGLE_SHEET_ID):
-                saved_remote = _fav_sheet_append(payload)
-            if saved_remote:
-                st.success(f"Favoritul „{payload['name']}” a fost salvat local și în Google Sheets.")
-            else:
-                st.success(f"Favoritul „{payload['name']}” a fost salvat local.")
-    local_favs = sorted(_FAV_LOCAL.keys())
-    lf1, lf2, lf3 = st.columns([0.6, 0.2, 0.2])
-    with lf1:
-        sel_fav = st.selectbox("Alege favorit", options=["(none)"]+local_favs)
-    with lf2:
-        if st.button("↩️ Încarcă", use_container_width=True, disabled=(sel_fav=="(none)")):
-            _fav_apply_to_state(_FAV_LOCAL.get(sel_fav, {}))
-            st.rerun()
-    with lf3:
-        if st.button("🗑️ Șterge favorit", use_container_width=True, disabled=(sel_fav=="(none)")):
-            _fav_local_delete(sel_fav)
-            st.rerun()
-
-    # Calcul
-    st.markdown("#### 📐 Calcul")
+    # Butonul principal — la finalul cardului de traseu, logic după opțiuni
     if st.button("Calculează traseul", key="calc_btn", use_container_width=True):
         issues: List[str] = []
-
         pts: List[Dict] = []
         # start cu fallback
         start_pt = _collect_point_from_state("start")
@@ -622,7 +700,6 @@ def run_streamlit_app() -> None:
             pts.append(start_pt)
         else:
             issues.append("Punctul de plecare nu a putut fi geocodat. Alege o variantă din listă sau reformulează.")
-
         # opriri cu fallback
         for key in st.session_state.get("stops_keys", []):
             p = _collect_point_from_state(key)
@@ -631,11 +708,9 @@ def run_streamlit_app() -> None:
             else:
                 txt = (st.session_state.get(f"txt_{key}") or "").strip()
                 issues.append(f"Oprirea „{txt or key}” nu a putut fi geocodată.")
-
         if issues:
             for msg in issues:
                 st.warning(msg)
-
         if len(pts) < 2:
             st.error("Adaugă minim o oprire validă.")
         else:
@@ -648,8 +723,7 @@ def run_streamlit_app() -> None:
                 segments.append({"from": a["display"], "to": b["display"], "km_oneway": km})
                 coords = res.get("coords") or []
                 if coords:
-                    path_coords_all.append(coords)
-
+                    path_coords_all.append(_simplify_coords(coords, PATH_SUBSAMPLE_STEP))
             if st.session_state.get("close_loop") and len(pts) >= 2:
                 a, b = pts[-1], pts[0]
                 res = route_osrm_retry(a["lat"], a["lon"], b["lat"], b["lon"]) or {}
@@ -657,13 +731,15 @@ def run_streamlit_app() -> None:
                 segments.append({"from": a["display"], "to": b["display"], "km_oneway": km})
                 coords = res.get("coords") or []
                 if coords:
-                    path_coords_all.append(coords)
-
+                    path_coords_all.append(_simplify_coords(coords, PATH_SUBSAMPLE_STEP))
             st.session_state["segments"] = segments
             st.session_state["paths"] = path_coords_all
             if any(seg["km_oneway"] == 0 for seg in segments):
                 st.info("Unele segmente au ieșit 0 km. Poate OSRM n-a avut drum; încearcă reformularea adreselor.")
             st.success("Traseul a fost recalculat. Poți bifa dus-întors, vizualiza harta și exporta.")
+
+    st.markdown("</div>", unsafe_allow_html=True)  # end card Traseu
+
 
     # Segmente + hartă + export
     if st.session_state.get("segments"):
@@ -747,6 +823,13 @@ def run_streamlit_app() -> None:
                 ws.cell(row=1, column=6, value="KM totali").font = Font(bold=True)
                 ws.cell(row=2, column=6, value=float(total)).font = Font(bold=True)
                 ws.column_dimensions["F"].width = 15
+                try:
+                    from openpyxl.styles import numbers
+                    for r in range(2, ws.max_row + 1):
+                        ws.cell(row=r, column=6).number_format = "0.0"
+                except Exception:
+                    pass
+
 
                 # înghețăm doar primul rând (header); rândul 2 (total) e scrollabil
                 ws.freeze_panes = "A2"
@@ -770,6 +853,10 @@ def _run_basic_tests() -> None:
     assert km_round(12.35, 1) in (12.3, 12.4)
     df = pd.DataFrame([{"Data":"01.01.2025","Plecare":"A","Destinație":"B","Dus-întors":"Nu","Înmulțiri (×)":2,"Km parcurși":24.6}])
     assert list(df.columns)==["Data","Plecare","Destinație","Dus-întors","Înmulțiri (×)","Km parcurși"]
+    # test simplu pentru bulk-add: ignora linii goale și spații
+    lines = [ln.strip() for ln in "\nA\n\n B "+"\n".splitlines()]
+    lines = [ln for ln in lines if ln]
+    assert lines == ["A", "B"]
 
 # ---------------- Main ----------------
 if __name__ == "__main__":
