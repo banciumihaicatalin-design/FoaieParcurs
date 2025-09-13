@@ -868,17 +868,20 @@ def run_streamlit_app() -> None:
                 for col_idx, col_name in enumerate(df.columns, 1):
                     ws.cell(row=1, column=col_idx, value=col_name).font = Font(bold=True)
 
-                # rândul 2: KM totali pe coloana F
-                ws.cell(row=1, column=6, value="KM totali").font = Font(bold=True)
-                ws.cell(row=2, column=6, value=float(total)).font = Font(bold=True)
-                ws.column_dimensions["F"].width = 15
+                # coloana pentru total = următoarea după ultimele coloane ale datelor
+                tot_col = df.shape[1] + 1  # ex: dacă df are 6 coloane (A..F), totalul merge pe G
+                ws.cell(row=1, column=tot_col, value="KM totali").font = Font(bold=True)
+                ws.cell(row=2, column=tot_col, value=float(total)).font = Font(bold=True)
+
+                # format numeric pe coloana de total
                 try:
+                    from openpyxl.utils import get_column_letter
+                    col_letter = get_column_letter(tot_col)
+                    ws.column_dimensions[col_letter].width = 15
                     from openpyxl.styles import numbers
-                    for r in range(2, ws.max_row + 1):
-                        ws.cell(row=r, column=6).number_format = "0.0"
+                    ws.cell(row=2, column=tot_col).number_format = "0.0"
                 except Exception:
                     pass
-
 
                 # înghețăm doar primul rând (header); rândul 2 (total) e scrollabil
                 ws.freeze_panes = "A2"
