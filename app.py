@@ -3,7 +3,6 @@
 Foaie de parcurs - calcul automat km (OSRM gratuit)
 Funționalități:
  - Data foii de parcurs (un singur câmp)
- - Reordonare opriri cu săgeți ↑ / ↓ (butonașe rotunde lângă titlu)
  - Hartă interactivă (pydeck) cu markere + traseu
  - Opțiune „Revenire la punctul de plecare” (închidere circuit)
  - Favorite: salvare locală + hook Google Sheets (opțional)
@@ -17,7 +16,9 @@ from datetime import date, datetime
 from typing import List, Dict, Optional, Tuple
 
 import requests
+
 import pandas as pd
+
 
 try:
     import streamlit as st
@@ -447,10 +448,17 @@ def _refresh_candidates_if_due(key: str) -> None:
         st.session_state[f"{key}_sel"] = 0
         st.session_state[f"{key}_last_fetch_ts"] = time.time()
 
+
 def _move_stop(old_idx: int, new_idx: int) -> None:
     keys = st.session_state.get("stops_keys", [])
     if 0 <= old_idx < len(keys) and 0 <= new_idx < len(keys):
         keys.insert(new_idx, keys.pop(old_idx))
+
+
+def _reorder_stops_simple() -> None:
+    """No-op: reordonarea se face direct cu butoane ↑/↓ la fiecare oprire."""
+    pass
+
 
 def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     if st is None: return
@@ -462,13 +470,14 @@ def _render_address_row(label: str, key: str, index: int, total: int) -> None:
     with ctitle:
         st.markdown(f"<p class='card-title'>Oprire #{index+1}</p>", unsafe_allow_html=True)
     with cactions:
-        cdup, crm = st.columns(2)
-        with cdup:
-            if st.button("⧉", key=f"dup_{key}_{index}", help="Duplică oprirea", type="secondary"):
-                # creează o nouă oprire cu același text ca aceasta
-                new_key = f"stop_{len(st.session_state.stops_keys)}"
-                st.session_state.stops_keys.append(new_key)
-                _init_addr_state(new_key, st.session_state.get(f"txt_{key}") or st.session_state.get(key) or "")
+        cup, cdown, crm = st.columns(3)
+        with cup:
+            if st.button("↑", key=f"up_{key}_{index}", help="Mută în sus", type="secondary", disabled=(index == 0)):
+                _move_stop(index, index - 1)
+                st.rerun()
+        with cdown:
+            if st.button("↓", key=f"down_{key}_{index}", help="Mută în jos", type="secondary", disabled=(index >= total - 1)):
+                _move_stop(index, index + 1)
                 st.rerun()
         with crm:
             if st.button("✖", key=f"rm_{key}_{index}", help="Șterge oprirea", type="secondary"):
